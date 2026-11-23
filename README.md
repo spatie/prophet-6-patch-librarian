@@ -1,4 +1,4 @@
-<img src="assets/app-icon.png" alt="Prophet-6 Patch Librarian icon" width="128">
+[![Prophet-6 Patch Librarian app icon beside the macOS app showing Old Men of MIDI patches](assets/readme-hero.webp)](assets/patch-list.jpg)
 
 # Prophet-6 Patch Librarian
 
@@ -10,8 +10,6 @@ The [Sequential Prophet-6](https://sequential.com/product/prophet-6/) is a six-v
 - [**Linux (x86-64)**](https://github.com/spatie/prophet-6-patch-librarian/releases/latest/download/Prophet-6-Patch-Librarian-Linux-x86_64.tar.gz): Extract the archive and run `./prophet-6-patch-librarian` from the extracted folder. Built for Ubuntu 24.04. You’ll need a desktop with Vulkan support and access to the ALSA sequencer for USB MIDI.
 
 See the [latest release](https://github.com/spatie/prophet-6-patch-librarian/releases/latest) for release notes and SHA-256 checksums.
-
-![Patch Librarian on macOS with the Old Men of MIDI collection loaded](assets/patch-list.jpg)
 
 ## Organize patches
 
@@ -40,6 +38,20 @@ Connect it directly over USB and set **MIDI SysEx** to **USB** in the upper Glob
 
 Protocol reference: [Sequential Prophet-6 Operation Manual, Appendix C](https://sequential.com/wp-content/uploads/2021/02/Prophet-6-Operation-Manual-2.1.pdf).
 
+## About Spatie
+
+Spatie is a web development agency based in Antwerp, Belgium. You'll find an overview of our open source projects [on our website](https://spatie.be/open-source).
+
+## Support us
+
+[<img src="https://spatie.be/github-ad-image/prophet-6-patch-librarian.jpg" alt="Web development by Spatie" width="419" />](https://spatie.be/github-ad-click/prophet-6-patch-librarian)
+
+If you find Patch Librarian useful, you can support our open source work by [buying one of our paid products](https://spatie.be/open-source/support-us).
+
+## Postcardware
+
+You're free to use the app. If it earns a spot next to your Prophet-6, we'd love a postcard from your hometown. You'll find our address on [our contact page](https://spatie.be/about-us) and the cards we've received on [our postcard wall](https://spatie.be/open-source/postcards).
+
 ## Build
 
 The app is built in Rust with [GPUI Kit](https://gpui-kit.com/) and [midir](https://github.com/Boddlnagg/midir). Use a current stable Rust toolchain. On macOS, install Xcode and its command-line tools. On Ubuntu, install `libasound2-dev libfontconfig1-dev libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev`.
@@ -64,18 +76,6 @@ Please see Spatie's [contribution guide](https://github.com/spatie/.github/blob/
 ## Code of Conduct
 
 Please read our [Code of Conduct](CODE_OF_CONDUCT.md) before participating.
-
-## About Spatie
-
-Spatie is a web development agency based in Antwerp, Belgium. You'll find an overview of our open source projects [on our website](https://spatie.be/open-source).
-
-## Support us
-
-If you find Patch Librarian useful, you can support our open source work by [buying one of our paid products](https://spatie.be/open-source/support-us).
-
-## Postcardware
-
-You're free to use the app. If it earns a spot next to your Prophet-6, we'd love a postcard from your hometown. You'll find our address on [our contact page](https://spatie.be/about-us) and the cards we've received on [our postcard wall](https://spatie.be/open-source/postcards).
 
 ## License
 
