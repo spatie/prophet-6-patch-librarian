@@ -10,7 +10,7 @@ use gpui_kit::{
         ActiveTheme, WindowExt,
         button::ButtonVariant,
         checkbox::Checkbox,
-        input::{Input, InputState},
+        input::{InputEvent, InputState},
     },
     *,
 };
@@ -50,6 +50,13 @@ impl SyncState {
     }
 }
 
+pub(crate) struct PatchRename {
+    pub(crate) id: u64,
+    pub(crate) input: Entity<InputState>,
+    pub(crate) error: Option<&'static str>,
+    _events: Subscription,
+}
+
 pub(crate) struct Librarian {
     collection: Collection,
     preview_preference: Option<PathBuf>,
@@ -57,6 +64,7 @@ pub(crate) struct Librarian {
     sync: SyncState,
     pub(crate) selected: BTreeSet<u64>,
     pub(crate) current: Option<u64>,
+    pub(crate) rename: Option<PatchRename>,
     anchor: Option<u64>,
     pub(crate) list_focus: FocusHandle,
     pub(crate) scroll: UniformListScrollHandle,
@@ -68,7 +76,7 @@ pub(crate) struct Librarian {
 }
 
 impl Librarian {
-    pub(crate) fn new(_: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(cx: &mut Context<Self>) -> Self {
         let preview_preference = ProjectDirs::from("com", "Spatie", crate::TITLE)
             .map(|dirs| dirs.config_dir().join("skip-preview-warning"));
         let skip_preview_warning = preview_preference
@@ -100,6 +108,7 @@ impl Librarian {
             sync: SyncState::Unsent,
             selected: BTreeSet::new(),
             current: None,
+            rename: None,
             anchor: None,
             list_focus: cx.focus_handle(),
             scroll: UniformListScrollHandle::new(),
@@ -212,7 +221,15 @@ impl Librarian {
             .current
             .and_then(|id| patches.iter().position(|e| e.id == id));
         let modifiers = event.keystroke.modifiers;
+        if self.rename.is_some() {
+            return;
+        }
         match event.keystroke.key.as_str() {
+            "enter" if self.selected.len() == 1 && !modifiers.modified() => {
+                if let Some(index) = position.filter(|i| self.selected.contains(&patches[*i].id)) {
+                    self.start_rename(index, window, cx);
+                }
+            }
             "a" if modifiers.platform || modifiers.control => {
                 self.selected = patches.iter().map(|e| e.id).collect();
                 cx.notify();
@@ -264,88 +281,86 @@ impl Librarian {
         cx.stop_propagation();
     }
 
-    pub(crate) fn rename_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.editable() || self.selected.len() != 1 {
+    pub(crate) fn start_rename(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.editable() {
             return;
         }
-        let Some(index) = self
-            .collection
-            .patches
-            .iter()
-            .position(|e| self.selected.contains(&e.id))
-        else {
-            return;
-        };
-        let patch = self.collection.patches[index].patch.clone();
-        let input = cx.new(|cx| InputState::new(window, cx).default_value(patch.name()));
-        let focus = input.clone();
-        let error = Rc::new(Cell::<Option<&str>>::new(None));
-        let renamed = Rc::new(Cell::new(None));
-        let view = cx.entity().downgrade();
-        self.busy = true;
-        cx.notify();
-
-        window.open_alert_dialog(cx, move |dialog, _, cx| {
-            let theme = cx.theme();
-            let hint = error.get();
-            let input = input.clone();
-            let error = error.clone();
-            let on_ok = renamed.clone();
-            let on_close = renamed.clone();
-            let view = view.clone();
-            let patch = patch.clone();
-            dialog
-                .confirm()
-                .centered()
-                .title("Rename patch")
-                .ok_text("Rename")
-                .child(Input::new(&input).aria_label("Patch name"))
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(if hint.is_some() {
-                            theme.danger
-                        } else {
-                            theme.muted_foreground
-                        })
-                        .child(
-                            hint.map(str::to_owned)
-                                .unwrap_or_else(|| format!("Up to {} characters", sysex::NAME_LEN)),
-                        ),
-                )
-                .on_ok(move |_, window, cx| {
-                    let value = input.read(cx).value();
-                    let name = value.trim_end_matches(' ');
-                    let mut updated = (*patch).clone();
-                    if let Err(message) = updated.rename(name) {
-                        error.set(Some(message));
-                        window.refresh();
-                        return false;
+        let entry = &self.collection.patches[index];
+        let id = entry.id;
+        let name = entry.patch.name();
+        let input = cx.new(|cx| InputState::new(window, cx).default_value(name));
+        let events = cx.subscribe_in(
+            &input,
+            window,
+            |this, input, event, window, cx| match event {
+                InputEvent::PressEnter { .. } => this.commit_rename(window, cx),
+                InputEvent::Blur => this.cancel_rename(cx),
+                InputEvent::Change => {
+                    if let Some(rename) = &mut this.rename
+                        && rename.input == *input
+                        && rename.error.take().is_some()
+                    {
+                        cx.notify();
                     }
-                    if name != patch.name() {
-                        on_ok.set(Some(updated));
-                    }
-                    true
-                })
-                .on_close(move |_, _, cx| {
-                    let _ = view.update(cx, |this, cx| {
-                        this.busy = false;
-                        if let Some(patch) = on_close.take() {
-                            this.collection.replace_patch(index, patch);
-                            this.error = None;
-                            this.select(index, false, false, cx);
-                        } else {
-                            cx.notify();
-                        }
-                    });
-                })
+                }
+                InputEvent::Focus => {}
+            },
+        );
+        self.select(index, false, false, cx);
+        self.scroll.scroll_to_item(index, ScrollStrategy::Nearest);
+        self.rename = Some(PatchRename {
+            id,
+            input: input.clone(),
+            error: None,
+            _events: events,
         });
         window.on_next_frame(move |window, cx| {
-            focus.update(cx, |state, cx| {
+            input.update(cx, |state, cx| {
                 state.focus(window, cx);
                 state.select_all(window, cx);
             });
         });
+    }
+
+    fn commit_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(rename) = self.rename.as_mut() else {
+            return;
+        };
+        let Some(index) = self
+            .collection
+            .patches
+            .iter()
+            .position(|entry| entry.id == rename.id)
+        else {
+            self.cancel_rename(cx);
+            return;
+        };
+        let value = rename.input.read(cx).value();
+        let name = value.trim_end_matches(' ');
+        let patch = &self.collection.patches[index].patch;
+        if name != patch.name() {
+            let mut updated = (**patch).clone();
+            if let Err(error) = updated.rename(name) {
+                rename.error = Some(error);
+                cx.notify();
+                return;
+            }
+            self.collection.replace_patch(index, updated);
+            self.select(index, false, false, cx);
+        }
+        self.cancel_rename(cx);
+        self.list_focus.focus(window, cx);
+    }
+
+    pub(crate) fn cancel_rename(&mut self, cx: &mut Context<Self>) {
+        if self.rename.take().is_some() {
+            cx.notify();
+        }
     }
 
     pub(crate) fn remove_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {

@@ -9,6 +9,7 @@ use gpui_kit::{
     component::{
         ActiveTheme, Disableable, IconName, Sizable, Theme,
         button::{Button, ButtonVariants},
+        input::Input,
         list::ListItem,
         progress::Progress,
     },
@@ -33,6 +34,9 @@ impl Render for Librarian {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if !cx.has_active_drag() {
             self.dragged_ids.clear();
+        }
+        if self.busy {
+            self.rename = None;
         }
         let theme = cx.theme();
         div()
@@ -340,6 +344,13 @@ impl Librarian {
                         .flex_1()
                         .min_h_0()
                         .overflow_hidden()
+                        .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                            if this.rename.is_some() && event.keystroke.key == "escape" {
+                                this.cancel_rename(cx);
+                                this.list_focus.focus(window, cx);
+                                cx.stop_propagation();
+                            }
+                        }))
                         .on_key_down(cx.listener(Self::list_key))
                         .on_drop(cx.listener(|this, drag: &DragPatches, window, cx| {
                             if let Some(gap) = this.gap_at(window.mouse_position()) {
@@ -431,16 +442,6 @@ impl Librarian {
                                     actions.child(format!("{selected} selected"))
                                 })
                                 .child(
-                                    Button::new("rename-patch")
-                                        .ghost()
-                                        .small()
-                                        .label("Rename")
-                                        .disabled(!self.editable() || selected != 1)
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            this.rename_selected(window, cx)
-                                        })),
-                                )
-                                .child(
                                     Button::new("remove-selected")
                                         .ghost()
                                         .small()
@@ -502,6 +503,78 @@ impl Librarian {
         let theme = cx.theme();
         let focus = self.list_focus.clone();
         let click = view.clone();
+        let rename = self.rename.as_ref().filter(|rename| rename.id == id);
+        let interactive = self.editable() && !projecting;
+        let name_cell = div()
+            .min_w_0()
+            .flex_1()
+            .pr_3()
+            .flex()
+            .items_center()
+            .map(|cell| {
+                if let Some(rename) = rename {
+                    let outside = view.clone();
+                    cell.gap_2()
+                        .child(
+                            div()
+                                .id(("rename-field", id))
+                                .ml(px(-7.))
+                                .w(px(244.))
+                                .flex_none()
+                                .on_mouse_down_out(move |_, _, cx| {
+                                    let _ = outside.update(cx, |this, cx| this.cancel_rename(cx));
+                                })
+                                .child(
+                                    Input::new(&rename.input)
+                                        .aria_label("Patch name")
+                                        .small()
+                                        .px(px(6.))
+                                        .rounded_md()
+                                        .focus_bordered(false)
+                                        .border_color(if rename.error.is_some() {
+                                            theme.danger
+                                        } else {
+                                            theme.blue.opacity(0.8)
+                                        }),
+                                ),
+                        )
+                        .when_some(rename.error, |cell, error| {
+                            cell.child(
+                                div()
+                                    .min_w_0()
+                                    .text_xs()
+                                    .text_color(theme.danger)
+                                    .child(error),
+                            )
+                        })
+                } else {
+                    let edit = view.clone();
+                    cell.child(
+                        div()
+                            .id(("patch-name", id))
+                            .ml(px(-7.))
+                            .min_w_0()
+                            .px(px(7.))
+                            .py_0p5()
+                            .rounded_md()
+                            .truncate()
+                            .child(name.clone())
+                            .when(interactive, |label| {
+                                label
+                                    .cursor_text()
+                                    .hover(|label| label.bg(theme.foreground.opacity(0.055)))
+                                    .on_click(move |event, window, cx| {
+                                        if !event.modifiers().modified() {
+                                            cx.stop_propagation();
+                                            let _ = edit.update(cx, |this, cx| {
+                                                this.start_rename(index, window, cx);
+                                            });
+                                        }
+                                    })
+                            }),
+                    )
+                }
+            });
         div().child(
             ListItem::new(("patch", id))
                 .selected(!moving && selected)
@@ -513,7 +586,7 @@ impl Librarian {
                 .border_color(theme.foreground.opacity(0.05))
                 .accessibility_label(format!("Slot {slot}, {name}, {source}"))
                 .when(moving, |row| row.bg(theme.primary.opacity(0.09)))
-                .when(self.editable() && !projecting, |row| {
+                .when(interactive && rename.is_none(), |row| {
                     let drag_focus = focus.clone();
                     let ids = if selected {
                         self.selected.clone()
@@ -560,7 +633,7 @@ impl Librarian {
                                 .text_color(theme.muted_foreground)
                                 .child(slot),
                         )
-                        .child(div().min_w_0().flex_1().pr_3().truncate().child(name))
+                        .child(name_cell)
                         .child(
                             div()
                                 .w_48()

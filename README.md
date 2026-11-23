@@ -11,24 +11,24 @@ The [Sequential Prophet-6](https://sequential.com/product/prophet-6/) is a six-v
 
 See the [latest release](https://github.com/spatie/prophet-6-patch-librarian/releases/latest) for release notes and SHA-256 checksums.
 
-![A full working list with patches from two SysEx files](assets/patch-list.png)
+![Patch Librarian on macOS with the Old Men of MIDI collection loaded](assets/patch-list.jpg)
 
 ## Organize patches
 
 1. Click **Add .syx** or drop files onto the list. Each file adds its patches at the end. The **Source** column shows where each patch came from.
-2. Drag patches to reorder them. Shift-click selects a range; Command-click toggles individual patches. Select one patch and click **Rename** to edit its name (up to 20 printable ASCII characters). Use **Remove selected** or Delete to take patches out of the list. **Clear list** asks before removing everything.
+2. Drag patches to reorder them. Shift-click selects a range; Command-click toggles individual patches. Click a patch name to edit it in place, then press Return to save or Escape to cancel. Names can be up to 20 printable ASCII characters. Use **Remove selected** or Delete to take patches out of the list. **Clear list** asks before removing everything.
 3. Click **Export** to save a `.syx` file to a folder you choose. With nothing selected, it saves the whole list. With a selection, it saves only those patches. Export numbers patches from `000` in list order.
 
-Editing the list never writes to the synth or changes the original files. The working list starts empty when you reopen the app, so export it before quitting if you want to keep it.
+Editing the list never writes to the synth or changes the original files. On macOS, if you close the window, click the Dock icon to bring back your working list. The list resets when you quit the app, so export it first if you want to keep it.
 
 ## Patch collections
 
-If the download is a ZIP, unzip it first. Use **Add .syx** to import the patch files into the working list.
+Here are some great patches to try on your Prophet-6. Start with the factory sounds, or pick a few favorites from different packs and make a bank of your own. Unzip any archives first, then use **Add .syx** to bring the sounds into Patch Librarian.
 
-- [Sequential Factory Presets](https://sequential.com/wp-content/uploads/2015/07/P6-Factory-Programs-ReadMe.zip)
-- [Old Men of MIDI](https://sequential.com/wp-content/uploads/2015/09/Prophet6_OMOM_Sounds.zip)
-- [Chords of Quebec](https://www.presetpatch.com/f/sequential-prophet-6/chords_of_quebec_syx)
-- [The Sun God RA](https://www.presetpatch.com/f/sequential-prophet-6/prophet-6_-_the_sun_god_ra_bank_zip)
+- [Sequential Factory Presets](https://sequential.com/wp-content/uploads/2015/07/P6-Factory-Programs-ReadMe.zip). The 500 sounds that ship with the Prophet-6, straight from Sequential. A good starting point if you want to build a bank around sounds you already know.
+- [Old Men of MIDI](https://sequential.com/wp-content/uploads/2015/09/Prophet6_OMOM_Sounds.zip). A 270-patch collaboration released by Sequential, with contributions from Jordan Rudess, John “Skippy” Lehmkuhl, and ten other sound designers. Try the organs, animated pads, or the more out-there arps and percussion.
+- [Chords of Quebec](https://www.presetpatch.com/f/sequential-prophet-6/chords_of_quebec_syx). A single patch shared by Nolandelepine on Preset Patch. An easy one to drop into a bank you're already putting together.
+- [The Sun God RA](https://www.presetpatch.com/f/sequential-prophet-6/prophet-6_-_the_sun_god_ra_bank_zip). A bank shared by the sun god RA on Preset Patch, designed with the Prophet-6's Vintage Mode switched on.
 
 ## Connect your Prophet-6
 
@@ -68,6 +68,10 @@ Please read our [Code of Conduct](CODE_OF_CONDUCT.md) before participating.
 ## About Spatie
 
 Spatie is a web development agency based in Antwerp, Belgium. You'll find an overview of our open source projects [on our website](https://spatie.be/open-source).
+
+## Support us
+
+If you find Patch Librarian useful, you can support our open source work by [buying one of our paid products](https://spatie.be/open-source/support-us).
 
 ## Postcardware
 
