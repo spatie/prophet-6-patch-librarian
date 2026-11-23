@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+started=$SECONDS
+
+echo 'Checking Linux build and GUI dependencies...'
+packages=(
+    build-essential pkg-config curl ca-certificates
+    libasound2-dev libfontconfig1-dev libxcb1-dev
+    libxkbcommon-dev libxkbcommon-x11-dev
+    libvulkan1 mesa-vulkan-drivers xauth xdotool xvfb
+)
+missing=()
+for package in "${packages[@]}"; do
+    if [[ $(dpkg-query -W -f='${Status}' "$package" 2>/dev/null || true) != 'install ok installed' ]]; then
+        missing+=("$package")
+    fi
+done
+if ((${#missing[@]})); then
+    sudo -n apt-get update
+    sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing[@]}"
+fi
+echo "System dependencies ready after $((SECONDS - started))s."
+
+step=$SECONDS
+echo 'Preparing stable Rust and rustfmt...'
+cargo_home=${CARGO_HOME:-$HOME/.cargo}
+export PATH="$cargo_home/bin:$PATH"
+if ! command -v rustup >/dev/null; then
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
+        sh -s -- -y --profile minimal --default-toolchain stable --component rustfmt --no-modify-path
+else
+    rustup toolchain install stable --profile minimal --component rustfmt --no-self-update
+fi
+rustup override set stable
+
+profile_marker='# Rust toolchain for Prophet-6 Patch Librarian orbs'
+if ! grep -Fqx "$profile_marker" "$HOME/.bash_profile" 2>/dev/null; then
+    printf '\n%s\n. "%s/env"\n' "$profile_marker" "$cargo_home" >> "$HOME/.bash_profile"
+fi
+rustc --version
+cargo --version
+echo "Rust ready in $((SECONDS - step))s."
+
+step=$SECONDS
+echo 'Caching locked Cargo dependencies for this platform...'
+host=$(rustc -vV | sed -n 's/^host: //p')
+cargo fetch --locked --target "$host"
+echo "Cargo dependencies cached in $((SECONDS - step))s."
+echo "Orb setup finished in $((SECONDS - started))s."
