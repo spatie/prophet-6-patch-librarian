@@ -11,33 +11,6 @@ The [Sequential Prophet-6](https://sequential.com/product/prophet-6/) is a six-v
 
 See the [latest release](https://github.com/spatie/prophet-6-patch-librarian/releases/latest) for release notes and SHA-256 checksums.
 
-## Organize patches
-
-1. Click **Add .syx** or drop files onto the list. Each file adds its patches at the end. The **Source** column shows where each patch came from.
-2. Drag patches to reorder them. Shift-click selects a range; Command-click toggles individual patches. Click a patch name to edit it in place, then press Return to save or Escape to cancel. Names can be up to 20 printable ASCII characters. Use **Remove selected** or Delete to take patches out of the list. **Clear list** asks before removing everything.
-3. Click **Export** to save a `.syx` file to a folder you choose. With nothing selected, it saves the whole list. With a selection, it saves only those patches. Export numbers patches from `000` in list order.
-
-Editing the list never writes to the synth or changes the original files. On macOS, if you close the window, click the Dock icon to bring back your working list. The list resets when you quit the app, so export it first if you want to keep it.
-
-## Patch collections
-
-Here are some great patches to try on your Prophet-6. Start with the factory sounds, or pick a few favorites from different packs and make a bank of your own. Unzip any archives first, then use **Add .syx** to bring the sounds into Patch Librarian.
-
-- [Sequential Factory Presets](https://sequential.com/wp-content/uploads/2015/07/P6-Factory-Programs-ReadMe.zip). The 500 sounds that ship with the Prophet-6, straight from Sequential. A good starting point if you want to build a bank around sounds you already know.
-- [Old Men of MIDI](https://sequential.com/wp-content/uploads/2015/09/Prophet6_OMOM_Sounds.zip). A 270-patch collaboration released by Sequential, with contributions from Jordan Rudess, John “Skippy” Lehmkuhl, and ten other sound designers. Try the organs, animated pads, or the more out-there arps and percussion.
-- [Chords of Quebec](https://www.presetpatch.com/f/sequential-prophet-6/chords_of_quebec_syx). A single patch shared by Nolandelepine on Preset Patch. An easy one to drop into a bank you're already putting together.
-- [The Sun God RA](https://www.presetpatch.com/f/sequential-prophet-6/prophet-6_-_the_sun_god_ra_bank_zip). A bank shared by the sun god RA on Preset Patch, designed with the Prophet-6's Vintage Mode switched on.
-
-## Connect your Prophet-6
-
-Connect it directly over USB and set **MIDI SysEx** to **USB** in the upper Globals menu (button 8). The app looks for one Prophet-6 MIDI input and output.
-
-- **Preview** loads one selected patch temporarily. Press a key on the Prophet-6 to hear it. Preview replaces unsaved synth edits, but does not overwrite saved patches. Only this warning can be turned off.
-- **Read** reads all 500 user slots and replaces the working list only after a complete read. Export the list immediately after reading to make a backup in the synth's current slot order.
-- **Send** requires exactly 500 patches and always asks before replacing user slots `000–499` in list order. The app does not write to factory slots `500–999` or read back slots after sending.
-
-Protocol reference: [Sequential Prophet-6 Operation Manual, Appendix C](https://sequential.com/wp-content/uploads/2021/02/Prophet-6-Operation-Manual-2.1.pdf).
-
 ## About Spatie
 
 Spatie is a web development agency based in Antwerp, Belgium. You'll find an overview of our open source projects [on our website](https://spatie.be/open-source).
@@ -51,6 +24,31 @@ If you find Patch Librarian useful, you can support our open source work by [buy
 ## Postcardware
 
 You're free to use the app. If it earns a spot next to your Prophet-6, we'd love a postcard from your hometown. You'll find our address on [our contact page](https://spatie.be/about-us) and the cards we've received on [our postcard wall](https://spatie.be/open-source/postcards).
+
+## Usage
+
+You don't have to plug in the synth to get started. Drop a couple of `.syx` files onto the list or click **Add .syx**. Each file adds its patches to the end, and the **Source** column tells you which pack each patch came from. Drag your favorites into the order you want. Shift-click to select a range, or hold Command on macOS (Ctrl on Linux) to pick patches one at a time.
+
+To rename a patch, click its name and press Return when you're happy with it. Escape cancels the edit. The Prophet-6 has room for 20 printable ASCII characters per name. Use **Remove selected** to take patches out of the list, or **Clear list** to start over. None of this touches the original files or the patches on your synth.
+
+When you've got a list you like, click **Export**. It saves the selected patches, or the whole list if nothing is selected, as a `.syx` file. The exported slots start at `000` and follow the list order. On a Mac, closing the window keeps your list around: just click the Dock icon to bring it back. Quitting clears it, so export anything you want to keep first.
+
+When you're ready to plug in the Prophet-6, connect it directly over USB. On the synth, open the upper Globals menu and set **MIDI SysEx** (button 8) to **USB**. Here's what I'd do next:
+
+- **Back up what's already on the synth.** Click **Read** to pull in all 500 user slots, then export the whole list before rearranging it. If you're already working on a list, export that first: a successful read replaces it.
+- **Try a sound before committing to it.** Select one patch, click **Preview**, and play a few notes on the Prophet-6. This won't overwrite a saved patch, but it will replace any unsaved edits on the synth.
+- **Send the bank when you're happy with it.** You'll need exactly 500 patches. **Send** asks before replacing user slots `000–499` in list order. It leaves factory slots `500–999` alone and doesn't read the user slots back to verify the write.
+
+For the MIDI details, see [Appendix C of the Prophet-6 manual](https://sequential.com/wp-content/uploads/2021/02/Prophet-6-Operation-Manual-2.1.pdf).
+
+## Patch collections
+
+Here are some great patches to try on your Prophet-6. Start with the factory sounds, or pick a few favorites from different packs and make a bank of your own. Unzip any archives first, then use **Add .syx** to bring the sounds into Patch Librarian.
+
+- [Sequential Factory Presets](https://sequential.com/wp-content/uploads/2015/07/P6-Factory-Programs-ReadMe.zip). The 500 sounds that ship with the Prophet-6, straight from Sequential. A good starting point if you want to build a bank around sounds you already know.
+- [Old Men of MIDI](https://sequential.com/wp-content/uploads/2015/09/Prophet6_OMOM_Sounds.zip). A 270-patch collaboration released by Sequential, with contributions from Jordan Rudess, John “Skippy” Lehmkuhl, and ten other sound designers. Try the organs, animated pads, or the more out-there arps and percussion.
+- [Chords of Quebec](https://www.presetpatch.com/f/sequential-prophet-6/chords_of_quebec_syx). A single patch shared by Nolandelepine on Preset Patch. An easy one to drop into a bank you're already putting together.
+- [The Sun God RA](https://www.presetpatch.com/f/sequential-prophet-6/prophet-6_-_the_sun_god_ra_bank_zip). A bank shared by the sun god RA on Preset Patch, designed with the Prophet-6's Vintage Mode switched on.
 
 ## Build
 
