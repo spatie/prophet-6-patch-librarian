@@ -1,0 +1,19 @@
+[package]
+name = "prophet-6-patch-librarian"
+version = "1.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+anyhow = "1"
+directories = "6"
+gpui-kit = "=0.10.0"
+midir = "0.10"
+tempfile = "3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+coremidi = "0.9"
+coremidi-sys = "3.2"
+
+[profile.dev]
+debug = 0
