@@ -1,0 +1,79 @@
+name: Build macOS and Linux
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  RUSTUP_TOOLCHAIN: stable
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            artifact: linux-x86_64
+            path: target/linux/Prophet-6-Patch-Librarian-Linux-x86_64.tar.gz
+          - os: macos-15
+            artifact: macos-arm64-local-test-only
+            path: target/macos/Prophet-6-Patch-Librarian-macOS-arm64-local-test-only.zip
+    name: ${{ matrix.artifact }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        run: |
+          rustup update stable --no-self-update
+          rustup component add rustfmt
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libfontconfig1-dev libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev libvulkan1 mesa-vulkan-drivers xauth xdotool xvfb
+      - name: Confirm tag matches the app version
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          version=$(awk -F '"' '/^version = / { print $2; exit }' Cargo.toml)
+          test "$GITHUB_REF_NAME" = "v$version"
+      - name: Check formatting and test
+        run: |
+          cargo fmt --all --check
+          cargo test --locked
+      - name: Package and launch Linux build
+        if: runner.os == 'Linux' && github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          bash scripts/package-linux.sh
+          extract=$(mktemp -d)
+          tar -xzf target/linux/Prophet-6-Patch-Librarian-Linux-x86_64.tar.gz -C "$extract"
+          export APP="$extract/Prophet-6-Patch-Librarian/prophet-6-patch-librarian"
+          xvfb-run -a bash -e -c '
+            "$APP" &
+            pid=$!
+            trap "kill $pid 2>/dev/null || true" EXIT
+            timeout 30s xdotool search --sync --onlyvisible --pid "$pid" --name "^Prophet-6 Patch Librarian$" getwindowname %@
+          '
+      - name: Package macOS build for local testing
+        if: runner.os == 'macOS' && github.event_name != 'pull_request'
+        run: |
+          test "$(uname -m)" = arm64
+          bash scripts/package-macos.sh
+          ditto -c -k --keepParent 'target/macos/Prophet-6 Patch Librarian.app' target/macos/Prophet-6-Patch-Librarian-macOS-arm64-local-test-only.zip
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: github.event_name != 'pull_request'
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.path }}
+          if-no-files-found: error
