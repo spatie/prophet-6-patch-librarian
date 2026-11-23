@@ -1,9 +1,13 @@
+#[cfg(target_os = "macos")]
+mod about;
 mod app;
 mod library;
 mod midi;
 mod sysex;
 mod view;
 
+#[cfg(target_os = "macos")]
+use gpui_kit::component::TitleBar;
 use gpui_kit::{
     component::{Theme, ThemeMode},
     *,
@@ -11,17 +15,25 @@ use gpui_kit::{
 
 const TITLE: &str = "Prophet-6 Patch Librarian";
 
-actions!(librarian, [Quit, Import, Export]);
+actions!(librarian, [About, Quit, Import, Export]);
+#[cfg(target_os = "macos")]
+actions!(librarian, [Hide, HideOthers, ShowAll, Minimize, Zoom]);
 
 fn main() {
     gpui_kit::application()
         .with_assets(assets::Assets)
         .run(|cx| {
             gpui_kit::init(cx);
-            let shortcuts: [(&str, Box<dyn Action>); 3] = [
+            let shortcuts: Vec<(&str, Box<dyn Action>)> = vec![
                 ("secondary-q", Box::new(Quit)),
                 ("secondary-o", Box::new(Import)),
                 ("secondary-shift-s", Box::new(Export)),
+                #[cfg(target_os = "macos")]
+                ("secondary-h", Box::new(Hide)),
+                #[cfg(target_os = "macos")]
+                ("secondary-alt-h", Box::new(HideOthers)),
+                #[cfg(target_os = "macos")]
+                ("secondary-m", Box::new(Minimize)),
             ];
             let bindings = shortcuts
                 .into_iter()
@@ -35,7 +47,21 @@ fn main() {
                 Menu {
                     name: TITLE.into(),
                     disabled: false,
-                    items: vec![MenuItem::action("Quit Patch Librarian", Quit)],
+                    items: vec![
+                        #[cfg(target_os = "macos")]
+                        MenuItem::action("About Prophet-6 Patch Librarian", About),
+                        #[cfg(target_os = "macos")]
+                        MenuItem::separator(),
+                        #[cfg(target_os = "macos")]
+                        MenuItem::action("Hide Prophet-6 Patch Librarian", Hide),
+                        #[cfg(target_os = "macos")]
+                        MenuItem::action("Hide Others", HideOthers),
+                        #[cfg(target_os = "macos")]
+                        MenuItem::action("Show All", ShowAll),
+                        #[cfg(target_os = "macos")]
+                        MenuItem::separator(),
+                        MenuItem::action("Quit Patch Librarian", Quit),
+                    ],
                 },
                 Menu {
                     name: "File".into(),
@@ -45,16 +71,77 @@ fn main() {
                         MenuItem::action("Export SysEx…", Export),
                     ],
                 },
+                #[cfg(target_os = "macos")]
+                Menu::new("Edit").items([
+                    MenuItem::os_action("Undo", component::input::Undo, OsAction::Undo),
+                    MenuItem::os_action("Redo", component::input::Redo, OsAction::Redo),
+                    MenuItem::separator(),
+                    MenuItem::os_action("Cut", component::input::Cut, OsAction::Cut),
+                    MenuItem::os_action("Copy", component::input::Copy, OsAction::Copy),
+                    MenuItem::os_action("Paste", component::input::Paste, OsAction::Paste),
+                    MenuItem::separator(),
+                    MenuItem::os_action(
+                        "Select All",
+                        component::input::SelectAll,
+                        OsAction::SelectAll,
+                    ),
+                ]),
+                #[cfg(target_os = "macos")]
+                Menu::new("Window").items([
+                    MenuItem::action("Minimize", Minimize),
+                    MenuItem::action("Zoom", Zoom),
+                ]),
             ]);
+            #[cfg(target_os = "macos")]
+            {
+                let about = std::rc::Rc::new(std::cell::Cell::new(None::<AnyWindowHandle>));
+                cx.on_action(move |_: &About, cx| {
+                    let about = about.clone();
+                    cx.defer(move |cx| {
+                        if let Some(handle) = about.get() {
+                            if handle
+                                .update(cx, |_, window, _| window.activate_window())
+                                .is_ok()
+                            {
+                                return;
+                            }
+                        }
+                        about.set(Some(about::open(cx)));
+                    });
+                });
+                cx.on_action(|_: &Hide, cx| cx.hide());
+                cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
+                cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());
+                cx.on_action(|_: &Minimize, cx| {
+                    if let Some(handle) = cx.active_window() {
+                        cx.defer(move |cx| {
+                            let _ = handle.update(cx, |_, window, _| window.minimize_window());
+                        });
+                    }
+                });
+                cx.on_action(|_: &Zoom, cx| {
+                    if let Some(handle) = cx.active_window() {
+                        cx.defer(move |cx| {
+                            let _ = handle.update(cx, |_, window, _| window.zoom_window());
+                        });
+                    }
+                });
+            }
+            #[cfg(target_os = "macos")]
+            let options = TitleBar::window_options();
+            #[cfg(not(target_os = "macos"))]
+            let options = WindowOptions::default();
             gpui_kit::open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::centered(size(px(1100.), px(700.)), cx)),
                     window_min_size: Some(size(px(880.), px(590.))),
                     titlebar: Some(TitlebarOptions {
                         title: Some(TITLE.into()),
-                        ..Default::default()
+                        #[cfg(target_os = "macos")]
+                        traffic_light_position: Some(point(px(14.), px(20.))),
+                        ..options.titlebar.unwrap_or_default()
                     }),
-                    ..Default::default()
+                    ..options
                 },
                 cx,
                 |window, cx| {

@@ -4880,6 +4880,7 @@ dependencies = [
  "directories",
  "gpui-kit",
  "midir",
+ "objc2-app-kit 0.3.2",
  "tempfile",
 ]
 

@@ -3,6 +3,8 @@ use crate::{
     app::{Librarian, Transfer},
     library::{Entry, USER_SLOT_COUNT},
 };
+#[cfg(target_os = "macos")]
+use gpui_kit::component::TitleBar;
 use gpui_kit::{
     component::{
         ActiveTheme, Disableable, IconName, Sizable, Theme,
@@ -39,10 +41,6 @@ impl Render for Librarian {
             .size_full()
             .flex()
             .flex_col()
-            .px_6()
-            .pt_5()
-            .pb_5()
-            .gap_4()
             .overflow_hidden()
             .bg(theme.sidebar)
             .text_color(theme.foreground)
@@ -51,20 +49,18 @@ impl Render for Librarian {
             })
             .on_action(cx.listener(|this, _: &Import, _, cx| this.import_picker(cx)))
             .on_action(cx.listener(|this, _: &Export, _, cx| this.export(cx)))
-            .child(self.toolbar(cx))
-            .child(self.patch_list(cx))
-            .when(self.progress.is_none() && !self.status.is_empty(), |root| {
-                root.child(
-                    div()
-                        .flex_none()
-                        .text_sm()
-                        .text_color(if self.error {
-                            theme.danger
-                        } else {
-                            theme.muted_foreground
-                        })
-                        .child(self.status.clone()),
-                )
+            .map(|root| {
+                #[cfg(target_os = "macos")]
+                let root = root.child(
+                    TitleBar::new()
+                        .h(px(56.))
+                        .pl(px(92.))
+                        .pr_4()
+                        .bg(theme.sidebar)
+                        .border_b_0()
+                        .child(self.toolbar(cx)),
+                );
+                root.child(self.workspace(cx))
             })
             .when_some(self.progress.as_ref(), |root, (transfer, done)| {
                 root.child(transfer_overlay(
@@ -77,6 +73,83 @@ impl Render for Librarian {
 }
 
 impl Librarian {
+    fn workspace(&self, cx: &Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        div()
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .px_4()
+            .pb_4()
+            .gap_3()
+            .map(|body| {
+                #[cfg(not(target_os = "macos"))]
+                let body = body
+                    .pt_4()
+                    .child(self.heading(theme))
+                    .child(self.toolbar(cx));
+                body
+            })
+            .child(self.patch_list(cx))
+            .when_some(self.error.as_ref(), |root, error| {
+                root.child(
+                    div()
+                        .flex_none()
+                        .text_sm()
+                        .text_color(theme.danger)
+                        .child(error.clone()),
+                )
+            })
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn heading(&self, theme: &Theme) -> impl IntoElement {
+        div()
+            .w_full()
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_4()
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(crate::TITLE),
+            )
+            .child(self.usb_status(theme))
+    }
+
+    fn usb_status(&self, theme: &Theme) -> impl IntoElement {
+        div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap_2()
+            .px_2()
+            .py_1()
+            .rounded_full()
+            .bg(if self.connected {
+                theme.green.opacity(0.10)
+            } else {
+                theme.foreground.opacity(0.045)
+            })
+            .text_xs()
+            .text_color(theme.muted_foreground)
+            .child(div().size(px(6.)).rounded_full().bg(if self.connected {
+                theme.green
+            } else {
+                theme.muted_foreground
+            }))
+            .child(if self.connected {
+                "USB connected"
+            } else {
+                "USB disconnected"
+            })
+    }
+
     fn toolbar(&self, cx: &Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let count = self.collection().patches.len();
@@ -86,12 +159,21 @@ impl Librarian {
             std::cmp::Ordering::Greater => "Remove extra patches to fit 500 user slots",
             std::cmp::Ordering::Equal => "Replace all 500 user slots in list order",
         };
-        let outline = |id, icon| Button::new(id).outline().rounded(px(8.)).icon(icon);
-        let preview = Button::new("preview")
-            .primary()
-            .rounded(px(8.))
-            .icon(IconName::Play)
-            .label("Preview patch")
+        let action = |id, icon| {
+            let button = Button::new(id).rounded(px(7.)).icon(icon);
+            if cfg!(target_os = "macos") {
+                button.ghost().small()
+            } else {
+                button.outline()
+            }
+        };
+        let preview = action("preview", IconName::Play)
+            .when(!cfg!(target_os = "macos"), |button| button.primary())
+            .label(if cfg!(target_os = "macos") {
+                "Preview"
+            } else {
+                "Preview patch"
+            })
             .tooltip(if self.selected.len() == 1 {
                 "Load the patch temporarily, then play it on the Prophet-6"
             } else {
@@ -101,87 +183,35 @@ impl Librarian {
             .on_click(cx.listener(|this, _, window, cx| this.audition(window, cx)));
 
         div()
-            .flex_none()
-            .flex()
-            .flex_col()
-            .gap_4()
-            .child(
-                div()
+                    .w_full()
+                    .flex_none()
                     .flex()
                     .items_center()
                     .justify_between()
-                    .gap_4()
+                    .gap_6()
                     .child(
                         div()
-                            .flex()
-                            .items_center()
-                            .gap_3()
-                            .child(
-                                div()
-                                    .text_2xl()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child("Prophet-6"),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_3()
-                            .when_some(self.sync_status(), |header, status| {
-                                header.child(div().text_xs().text_color(theme.muted_foreground).child(status))
-                            })
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .px_2()
-                                    .py_1()
-                                    .rounded_full()
-                                    .bg(if self.connected {
-                                        theme.green.opacity(0.10)
-                                    } else {
-                                        theme.foreground.opacity(0.045)
-                                    })
-                                    .text_xs()
-                                    .text_color(theme.muted_foreground)
-                                    .child(div().size(px(6.)).rounded_full().bg(
-                                        if self.connected {
-                                            theme.green
-                                        } else {
-                                            theme.muted_foreground
-                                        },
-                                    ))
-                                    .child(if self.connected {
-                                        "USB connected"
-                                    } else {
-                                        "USB disconnected"
-                                    }),
-                            ),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap_4()
-                    .child(
-                        div()
+                            .flex_none()
                             .flex()
                             .items_center()
                             .gap_2()
                             .child(
-                                outline("import", IconName::FolderOpen)
+                                action("import", IconName::FolderOpen)
                                     .label("Add .syx")
                                     .tooltip("Append one or more .syx files without replacing the list")
                                     .disabled(!self.editable())
                                     .on_click(cx.listener(|this, _, _, cx| this.import_picker(cx))),
                             )
                             .child(
-                                Button::new("export").ghost().rounded(px(8.)).icon(IconName::FileText)
-                                    .label(if self.selected.is_empty() {
+                                action("export", IconName::FileText)
+                                    .label(if cfg!(target_os = "macos") {
+                                        "Export"
+                                    } else if self.selected.is_empty() {
+                                        "Export list"
+                                    } else {
+                                        "Export selection"
+                                    })
+                                    .tooltip(if self.selected.is_empty() {
                                         "Export list"
                                     } else {
                                         "Export selection"
@@ -192,6 +222,7 @@ impl Librarian {
                     )
                     .child(
                         div()
+                            .flex_none()
                             .flex()
                             .items_center()
                             .gap_4()
@@ -201,8 +232,8 @@ impl Librarian {
                                     .items_center()
                                     .gap_2()
                                     .child(
-                                        outline("read", IconName::ArrowDown)
-                                            .label("Read from synth")
+                                        action("read", IconName::ArrowDown)
+                                            .label(if cfg!(target_os = "macos") { "Read" } else { "Read from synth" })
                                             .tooltip("Replace the list with the 500 user slots from the Prophet-6")
                                             .disabled(!online)
                                             .on_click(cx.listener(|this, _, window, cx| {
@@ -210,8 +241,8 @@ impl Librarian {
                                             })),
                                     )
                                     .child(
-                                        outline("send", IconName::ArrowUp)
-                                            .label("Send to synth")
+                                        action("send", IconName::ArrowUp)
+                                            .label(if cfg!(target_os = "macos") { "Send" } else { "Send to synth" })
                                             .tooltip(send_hint)
                                             .disabled(!online || count != USER_SLOT_COUNT)
                                             .on_click(cx.listener(|this, _, window, cx| {
@@ -219,10 +250,11 @@ impl Librarian {
                                             })),
                                     ),
                             )
-                            .child(div().w_px().h_5().bg(theme.border))
-                            .child(preview),
-                    ),
-            )
+                            .child(preview)
+                            .when(cfg!(target_os = "macos"), |bar| {
+                                bar.child(self.usb_status(theme))
+                            }),
+                    )
     }
 
     fn patch_list(&self, cx: &Context<Self>) -> impl IntoElement {
@@ -347,7 +379,8 @@ impl Librarian {
                 )
                 .child(
                     div()
-                        .h_12()
+                        .min_h_12()
+                        .py_2()
                         .flex_none()
                         .flex()
                         .items_center()
@@ -361,19 +394,32 @@ impl Librarian {
                         .child(
                             div()
                                 .flex()
-                                .items_center()
-                                .gap_3()
+                                .flex_col()
+                                .gap_1()
                                 .child(
                                     div()
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .text_color(theme.foreground)
-                                        .child(format!("{count} / {USER_SLOT_COUNT} patches")),
+                                        .flex()
+                                        .items_center()
+                                        .gap_3()
+                                        .child(
+                                            div()
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .text_color(theme.foreground)
+                                                .child(format!(
+                                                    "{count} / {USER_SLOT_COUNT} patches"
+                                                )),
+                                        )
+                                        .when(count > USER_SLOT_COUNT, |counter| {
+                                            counter.child(div().text_color(theme.danger).child(
+                                                format!(
+                                                    "{} over capacity",
+                                                    count - USER_SLOT_COUNT
+                                                ),
+                                            ))
+                                        }),
                                 )
-                                .when(count > USER_SLOT_COUNT, |counter| {
-                                    counter.child(div().text_color(theme.danger).child(format!(
-                                        "{} over capacity",
-                                        count - USER_SLOT_COUNT
-                                    )))
+                                .when_some(self.sync_status(), |footer, status| {
+                                    footer.child(div().child(status))
                                 }),
                         )
                         .child(

@@ -33,8 +33,7 @@ pub(crate) enum Transfer {
 }
 
 enum SyncState {
-    NotRead,
-    Read(Vec<u64>),
+    Unsent,
     Sent(Vec<u64>),
     SendFailed,
 }
@@ -43,9 +42,7 @@ impl SyncState {
     fn status(&self, patches: &[Entry]) -> Option<&'static str> {
         let matches = |ids: &[u64]| patches.iter().map(|entry| entry.id).eq(ids.iter().copied());
         match self {
-            Self::NotRead => Some("Not read from Prophet-6"),
-            Self::Read(ids) if matches(ids) => Some("Matches last read"),
-            Self::Read(_) => None,
+            Self::Unsent => None,
             Self::Sent(ids) if matches(ids) => Some("Sent, not verified"),
             Self::Sent(_) => Some("Working list changed since last send"),
             Self::SendFailed => Some("Send failed; slots may be partially overwritten"),
@@ -66,8 +63,7 @@ pub(crate) struct Librarian {
     pub(crate) dragged_ids: BTreeSet<u64>,
     pub(crate) connected: bool,
     pub(crate) busy: bool,
-    pub(crate) status: SharedString,
-    pub(crate) error: bool,
+    pub(crate) error: Option<SharedString>,
     pub(crate) progress: Option<(Transfer, Arc<AtomicUsize>)>,
 }
 
@@ -101,7 +97,7 @@ impl Librarian {
             collection: Collection::default(),
             preview_preference,
             skip_preview_warning,
-            sync: SyncState::NotRead,
+            sync: SyncState::Unsent,
             selected: BTreeSet::new(),
             current: None,
             anchor: None,
@@ -110,8 +106,7 @@ impl Librarian {
             dragged_ids: BTreeSet::new(),
             connected: false,
             busy: false,
-            status: "".into(),
-            error: false,
+            error: None,
             progress: None,
         }
     }
@@ -128,14 +123,9 @@ impl Librarian {
         !self.busy
     }
 
-    fn report(&mut self, status: impl Into<SharedString>, error: bool, cx: &mut Context<Self>) {
-        self.status = status.into();
-        self.error = error;
-        cx.notify();
-    }
-
     fn fail(&mut self, error: anyhow::Error, cx: &mut Context<Self>) {
-        self.report(format!("{error:#}"), true, cx);
+        self.error = Some(format!("{error:#}").into());
+        cx.notify();
     }
 
     pub(crate) fn select(
@@ -196,7 +186,8 @@ impl Librarian {
             .filter(|id| self.selected.contains(id))
             .or_else(|| self.selected.first().copied());
         self.anchor = self.current;
-        self.report("", false, cx);
+        self.error = None;
+        cx.notify();
         true
     }
 
@@ -341,8 +332,8 @@ impl Librarian {
                         this.busy = false;
                         if let Some(patch) = on_close.take() {
                             this.collection.replace_patch(index, patch);
+                            this.error = None;
                             this.select(index, false, false, cx);
-                            this.report("", false, cx);
                         } else {
                             cx.notify();
                         }
@@ -361,19 +352,15 @@ impl Librarian {
         if !self.editable() || self.selected.is_empty() {
             return;
         }
-        let count = self.selected.len();
-        if count == self.collection.patches.len() {
+        if self.selected.len() == self.collection.patches.len() {
             self.clear_list(window, cx);
             return;
         }
         self.collection.remove(&self.selected);
         self.reset_selection();
         self.list_focus.focus(window, cx);
-        self.report(
-            format!("Removed {count} {} from the list", patch_word(count)),
-            false,
-            cx,
-        );
+        self.error = None;
+        cx.notify();
     }
 
     pub(crate) fn clear_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -389,7 +376,8 @@ impl Librarian {
             |this, cx| {
                 this.collection.patches.clear();
                 this.reset_selection();
-                this.report("", false, cx);
+                this.error = None;
+                cx.notify();
             },
         );
     }
@@ -434,7 +422,6 @@ impl Librarian {
             return;
         }
         self.run(
-            "Reading SysEx files…",
             None,
             move |_| -> Result<_> {
                 let mut packs = Vec::new();
@@ -456,14 +443,9 @@ impl Librarian {
                     for (source, patches) in packs {
                         this.collection.append(patches, source);
                     }
-                    let count = this.collection.patches.len() - start;
                     this.scroll
                         .scroll_to_item_strict(start, ScrollStrategy::Top);
-                    this.report(
-                        format!("Added {count} {} to the list", patch_word(count)),
-                        false,
-                        cx,
-                    );
+                    cx.notify();
                 }
                 Err(err) => this.fail(err, cx),
             },
@@ -480,9 +462,8 @@ impl Librarian {
             return;
         }
         if patches.len() > USER_SLOT_COUNT {
-            self.report(
-                "Select at most 500 patches to export to user slots 000–499.",
-                true,
+            self.fail(
+                anyhow::anyhow!("Select at most 500 patches to export to user slots 000–499."),
                 cx,
             );
             return;
@@ -490,7 +471,10 @@ impl Librarian {
         let directory = UserDirs::new()
             .map(|dirs| dirs.document_dir().unwrap_or(dirs.home_dir()).to_path_buf());
         let Some(directory) = directory else {
-            self.report("No home folder is available for export.", true, cx);
+            self.fail(
+                anyhow::anyhow!("No home folder is available for export."),
+                cx,
+            );
             return;
         };
         let answer = cx.prompt_for_new_path(&directory, Some("Prophet-6 Patches.syx"));
@@ -505,22 +489,11 @@ impl Librarian {
                 this.busy = false;
                 match path {
                     Ok(Some(path)) => {
-                        let count = patches.len();
-                        let name = path
-                            .file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                            .into_owned();
                         this.run(
-                            "Exporting patches…",
                             None,
                             move |_| library::export(&path, &patches),
-                            move |this, result, cx| match result {
-                                Ok(()) => this.report(
-                                    format!("Exported {count} {} to {name}", patch_word(count)),
-                                    false,
-                                    cx,
-                                ),
+                            |this, result, cx| match result {
+                                Ok(()) => cx.notify(),
                                 Err(err) => this.fail(err, cx),
                             },
                             cx,
@@ -554,7 +527,6 @@ impl Librarian {
 
     fn read_all(&mut self, cx: &mut Context<Self>) {
         self.run(
-            "Reading user slots 000–499…",
             Some(Transfer::Read),
             |progress| {
                 let slots = (0..USER_SLOT_COUNT as u16).collect::<Vec<_>>();
@@ -572,11 +544,10 @@ impl Librarian {
                 Ok(patches) => {
                     this.collection.patches.clear();
                     this.collection.append(patches, "Prophet-6".into());
-                    this.sync =
-                        SyncState::Read(this.collection.patches.iter().map(|e| e.id).collect());
+                    this.sync = SyncState::Unsent;
                     this.reset_selection();
                     this.scroll.scroll_to_item_strict(0, ScrollStrategy::Top);
-                    this.report("", false, cx);
+                    cx.notify();
                 }
                 Err(err) => this.fail(err, cx),
             },
@@ -651,7 +622,6 @@ impl Librarian {
     fn preview(&mut self, patch: Arc<Patch>, skip_warning: bool, cx: &mut Context<Self>) {
         let path = self.preview_preference.clone();
         self.run(
-            "Sending preview to the edit buffer…",
             None,
             move |_| {
                 let preference = if skip_warning {
@@ -665,17 +635,13 @@ impl Librarian {
                 if skip_warning && preference.is_ok() {
                     this.skip_preview_warning = true;
                 }
-                let (status, error) = match sent {
-                    Ok(()) => ("Preview sent. Play a note on the Prophet-6.".into(), false),
-                    Err(err) => (format!("{err:#}"), true),
-                };
-                match preference {
-                    Ok(()) => this.report(status, error, cx),
-                    Err(err) => this.report(
-                        format!("{status} Could not save the preview preference: {err:#}"),
-                        true,
-                        cx,
-                    ),
+                let preference = preference.context("Could not save the preview preference");
+                match (sent, preference) {
+                    (Ok(()), Ok(())) => cx.notify(),
+                    (Err(error), Ok(())) | (Ok(()), Err(error)) => this.fail(error, cx),
+                    (Err(send), Err(preference)) => {
+                        this.fail(anyhow::anyhow!("{send:#}. {preference:#}"), cx);
+                    }
                 }
             },
             cx,
@@ -746,7 +712,6 @@ impl Librarian {
             .map(|entry| entry.id)
             .collect();
         self.run(
-            "Sending list to slots 000–499…",
             Some(Transfer::Send),
             move |progress| {
                 let patches = patches
@@ -758,13 +723,12 @@ impl Librarian {
             move |this, result, cx| match result {
                 Ok(()) => {
                     this.sync = SyncState::Sent(ids);
-                    this.report("", false, cx);
+                    cx.notify();
                 }
                 Err(err) => {
                     this.sync = SyncState::SendFailed;
-                    this.report(
-                        format!("{err:#}. Slots 000–499 may be partially overwritten."),
-                        true,
+                    this.fail(
+                        anyhow::anyhow!("{err:#}. Slots 000–499 may be partially overwritten."),
                         cx,
                     );
                 }
@@ -775,14 +739,14 @@ impl Librarian {
 
     fn run<T: Send + 'static>(
         &mut self,
-        status: &'static str,
         transfer: Option<Transfer>,
         work: impl FnOnce(&mut dyn FnMut(usize)) -> T + Send + 'static,
         done: impl FnOnce(&mut Self, T, &mut Context<Self>) + 'static,
         cx: &mut Context<Self>,
     ) {
         self.busy = true;
-        self.report(status, false, cx);
+        self.error = None;
+        cx.notify();
         let progress = Arc::new(AtomicUsize::new(0));
         if let Some(transfer) = transfer {
             self.progress = Some((transfer, progress.clone()));
@@ -836,10 +800,6 @@ fn save_preview_preference(path: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn patch_word(count: usize) -> &'static str {
-    if count == 1 { "patch" } else { "patches" }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{Collection, SyncState, sysex};
@@ -854,23 +814,20 @@ mod tests {
         let mut list = Collection::default();
         list.append(vec![patch.clone(), patch], "Prophet-6".into());
         let ids: Vec<_> = list.patches.iter().map(|entry| entry.id).collect();
-        let read = SyncState::Read(ids.clone());
         let sent = SyncState::Sent(ids.clone());
         let failed = SyncState::SendFailed;
-        assert_eq!(read.status(&list.patches), Some("Matches last read"));
+        assert_eq!(SyncState::Unsent.status(&list.patches), None);
         assert_eq!(sent.status(&list.patches), Some("Sent, not verified"));
 
         let mut renamed = (*list.patches[0].patch).clone();
         renamed.rename("Keys").unwrap();
         list.replace_patch(0, renamed);
-        assert_eq!(read.status(&list.patches), None);
         assert_eq!(
             sent.status(&list.patches),
             Some("Working list changed since last send")
         );
 
         assert!(list.reorder(&BTreeSet::from([list.patches[0].id]), 2));
-        assert_eq!(read.status(&list.patches), None);
         assert_eq!(
             sent.status(&list.patches),
             Some("Working list changed since last send")
