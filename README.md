@@ -35,7 +35,7 @@ When you've got a list you like, click **Export**. It saves the selected patches
 
 Use **Search** (Command+F on Mac, Ctrl+F on Linux) to find patches by name. Searching never changes slot numbers or export order. Selection and Select All apply to the visible results; clear the search before dragging patches into a new order.
 
-The app saves your patches, order, and export status automatically. After quitting or a crash, the next launch restores the last saved session. The footer shows when saving has finished; auto preview always starts off. Recovery is a local safety net, not a substitute for exporting `.syx` backups. On a Mac, clicking the Dock icon also reopens a closed window with the same list.
+The app saves your patches, order, and export status automatically. After quitting or a crash, the next launch restores the last saved session. Auto preview always starts off. Recovery is a local safety net, not a substitute for exporting `.syx` backups. On a Mac, clicking the Dock icon also reopens a closed window with the same list.
 
 When you're ready to plug in the Prophet-6, connect it directly over USB. On the synth, open the upper Globals menu and set **MIDI SysEx** (button 8) to **USB**. Here's what I'd do next:
 

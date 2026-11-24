@@ -82,7 +82,6 @@ pub(crate) struct Librarian {
     session_pending: Option<session::Snapshot>,
     session_saving: bool,
     close_after_save: Option<(CloseIntent, AnyWindowHandle)>,
-    pub(crate) recovery_status: &'static str,
     preview_preference: Option<PathBuf>,
     skip_preview_warning: bool,
     pub(crate) auto_preview: bool,
@@ -133,11 +132,9 @@ impl Librarian {
                         this.collection.append(snapshot.patches.into_iter().map(|patch| (*patch).clone()).collect());
                         if snapshot.exported { this.collection.mark_exported(); }
                         this.collection.read_bank = snapshot.read_bank;
-                        this.recovery_status = "Session restored";
                     }
-                    Ok(None) => this.recovery_status = "Session recovery ready",
+                    Ok(None) => {}
                     Err(error) => {
-                        this.recovery_status = "Session recovery unavailable";
                         this.fail(error.context("Could not restore the previous session; its file has been left unchanged"), cx);
                     }
                 }
@@ -176,7 +173,6 @@ impl Librarian {
             session_pending: None,
             session_saving: false,
             close_after_save: None,
-            recovery_status: "Restoring session…",
             preview_preference,
             skip_preview_warning,
             auto_preview: false,
@@ -255,7 +251,6 @@ impl Librarian {
             return;
         };
         self.session_saving = true;
-        self.recovery_status = "Saving session…";
         cx.notify();
         cx.spawn(async move |this, cx| {
             let saved = cx
@@ -265,7 +260,6 @@ impl Librarian {
                 this.session_saving = false;
                 match saved {
                     Ok(()) => {
-                        this.recovery_status = "Session saved";
                         if this.session_pending.is_some() {
                             this.save_next_session(cx);
                         } else if let Some((intent, handle)) = this.close_after_save.take() {
@@ -277,7 +271,6 @@ impl Librarian {
                         }
                     }
                     Err(error) => {
-                        this.recovery_status = "Session save failed";
                         if this.close_after_save.take().is_some() {
                             this.busy = false;
                         }
@@ -315,21 +308,17 @@ impl Librarian {
         !self.busy
     }
 
-    pub(crate) fn preview_status(&self) -> String {
+    pub(crate) fn preview_status(&self) -> Option<String> {
         if self.previewing {
-            "Loading preview…".into()
+            Some("Loading preview…".into())
         } else if self.auto_preview && !self.connected {
-            "Auto preview paused · Connect Prophet-6 by USB".into()
+            Some("Auto preview paused · Connect Prophet-6 by USB".into())
         } else if self.auto_preview && self.selected.len() > 1 {
-            "Auto preview paused · Select one patch".into()
-        } else if !self.connected {
-            "Connect Prophet-6 by USB to preview · Organize and export offline".into()
-        } else if let Some(name) = &self.last_preview {
-            format!("On Prophet-6: {name}")
-        } else if self.auto_preview {
-            "Select a patch, then play the Prophet-6".into()
+            Some("Auto preview paused · Select one patch".into())
         } else {
-            "Preview sounds without overwriting saved patches".into()
+            self.last_preview
+                .as_ref()
+                .map(|name| format!("On Prophet-6: {name}"))
         }
     }
 

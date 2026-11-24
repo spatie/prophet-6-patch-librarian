@@ -112,28 +112,6 @@ impl Librarian {
                 body
             })
             .child(self.browsing_controls(cx))
-            .child(
-                div()
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap_4()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(
-                        div()
-                            .id("preview-status")
-                            .min_w_0()
-                            .truncate()
-                            .role(Role::Status)
-                            .aria_label(self.preview_status())
-                            .child(self.preview_status()),
-                    )
-                    .when(self.is_filtered(), |bar| {
-                        bar.child("Clear search to reorder")
-                    }),
-            )
             .child(self.patch_list(cx))
             .when_some(self.error.as_ref(), |root, error| {
                 root.child(
@@ -508,11 +486,6 @@ impl Librarian {
                                                     "{count} / {USER_SLOT_COUNT} patches"
                                                 )),
                                         )
-                                        .child(if self.collection().needs_export() {
-                                            "Not exported"
-                                        } else {
-                                            "Exported"
-                                        })
                                         .when(self.is_filtered(), |counter| {
                                             counter.child(format!("{shown} shown"))
                                         })
@@ -528,13 +501,15 @@ impl Librarian {
                                 .when_some(self.sync_status(), |footer, status| {
                                     footer.child(div().child(status))
                                 })
-                                .child(
-                                    div()
-                                        .id("recovery-status")
-                                        .role(Role::Status)
-                                        .aria_label(self.recovery_status)
-                                        .child(self.recovery_status),
-                                ),
+                                .when_some(self.preview_status(), |footer, status| {
+                                    footer.child(
+                                        div()
+                                            .id("preview-status")
+                                            .role(Role::Status)
+                                            .aria_label(status.clone())
+                                            .child(status),
+                                    )
+                                }),
                         )
                         .child(
                             div()
