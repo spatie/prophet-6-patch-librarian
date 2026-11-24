@@ -1,6 +1,6 @@
 use crate::{
     library::{self, Collection, Entry, USER_SLOT_COUNT},
-    midi,
+    midi, session,
     sysex::{self, Patch},
 };
 use anyhow::{Context as _, Result, ensure};
@@ -8,8 +8,9 @@ use directories::{ProjectDirs, UserDirs};
 use gpui_kit::{
     component::{
         ActiveTheme, WindowExt,
-        button::ButtonVariant,
+        button::{Button, ButtonVariant, ButtonVariants},
         checkbox::Checkbox,
+        dialog::{Cancel, Confirm},
         input::{InputEvent, InputState},
     },
     *,
@@ -30,6 +31,21 @@ use std::{
 pub(crate) enum Transfer {
     Read,
     Send,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum CloseIntent {
+    Window,
+    Quit,
+}
+
+impl CloseIntent {
+    fn finish(self, window: &mut Window, cx: &mut App) {
+        match self {
+            Self::Window => window.remove_window(),
+            Self::Quit => crate::quit::approved(cx),
+        }
+    }
 }
 
 enum SyncState {
@@ -59,8 +75,21 @@ pub(crate) struct PatchRename {
 
 pub(crate) struct Librarian {
     collection: Collection,
+    pub(crate) search: Entity<InputState>,
+    query: String,
+    _search_events: Subscription,
+    session_path: Option<PathBuf>,
+    session_pending: Option<session::Snapshot>,
+    session_saving: bool,
+    close_after_save: Option<(CloseIntent, AnyWindowHandle)>,
+    pub(crate) recovery_status: &'static str,
     preview_preference: Option<PathBuf>,
     skip_preview_warning: bool,
+    pub(crate) auto_preview: bool,
+    pub(crate) previewing: bool,
+    preview_generation: u64,
+    pending_preview: Option<u64>,
+    last_preview: Option<String>,
     sync: SyncState,
     pub(crate) selected: BTreeSet<u64>,
     pub(crate) current: Option<u64>,
@@ -76,12 +105,45 @@ pub(crate) struct Librarian {
 }
 
 impl Librarian {
-    pub(crate) fn new(cx: &mut Context<Self>) -> Self {
-        let preview_preference = ProjectDirs::from("com", "Spatie", crate::TITLE)
+    pub(crate) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let dirs = ProjectDirs::from("com", "Spatie", crate::TITLE);
+        let preview_preference = dirs
+            .as_ref()
             .map(|dirs| dirs.config_dir().join("skip-preview-warning"));
+        let session_path = dirs.map(|dirs| dirs.data_dir().join("session.p6"));
         let skip_preview_warning = preview_preference
             .as_ref()
             .is_some_and(|path| path.is_file());
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search patches…"));
+        let search_events = cx.subscribe(&search, |this, search, event, cx| {
+            if matches!(event, InputEvent::Change) {
+                this.query = search.read(cx).value().to_string();
+                this.filters_changed(cx);
+            }
+        });
+        let path = session_path.clone();
+        cx.spawn(async move |this, cx| {
+            let restored = cx.background_spawn(async move {
+                session::load(&path.context("No application folder is available for session recovery")?)
+            }).await;
+            let _ = this.update(cx, |this, cx| {
+                this.busy = false;
+                match restored {
+                    Ok(Some(snapshot)) => {
+                        this.collection.append(snapshot.patches.into_iter().map(|patch| (*patch).clone()).collect());
+                        if snapshot.exported { this.collection.mark_exported(); }
+                        this.collection.read_bank = snapshot.read_bank;
+                        this.recovery_status = "Session restored";
+                    }
+                    Ok(None) => this.recovery_status = "Session recovery ready",
+                    Err(error) => {
+                        this.recovery_status = "Session recovery unavailable";
+                        this.fail(error.context("Could not restore the previous session; its file has been left unchanged"), cx);
+                    }
+                }
+                cx.notify();
+            });
+        }).detach();
         cx.spawn(async move |this, cx| {
             loop {
                 let connected = cx.background_spawn(async { midi::connected() }).await;
@@ -90,6 +152,10 @@ impl Librarian {
                         let online = connected.as_ref().is_ok_and(|online| *online);
                         if this.connected != online {
                             this.connected = online;
+                            if !online {
+                                this.cancel_pending_preview();
+                                this.last_preview = None;
+                            }
                             cx.notify();
                         }
                     })
@@ -103,8 +169,21 @@ impl Librarian {
         .detach();
         Self {
             collection: Collection::default(),
+            search,
+            query: String::new(),
+            _search_events: search_events,
+            session_path,
+            session_pending: None,
+            session_saving: false,
+            close_after_save: None,
+            recovery_status: "Restoring session…",
             preview_preference,
             skip_preview_warning,
+            auto_preview: false,
+            previewing: false,
+            preview_generation: 0,
+            pending_preview: None,
+            last_preview: None,
             sync: SyncState::Unsent,
             selected: BTreeSet::new(),
             current: None,
@@ -114,7 +193,7 @@ impl Librarian {
             scroll: UniformListScrollHandle::new(),
             dragged_ids: BTreeSet::new(),
             connected: false,
-            busy: false,
+            busy: true,
             error: None,
             progress: None,
         }
@@ -124,12 +203,134 @@ impl Librarian {
         &self.collection
     }
 
+    pub(crate) fn visible_indices(&self) -> Vec<usize> {
+        self.collection.matching_indices(&self.query)
+    }
+
+    pub(crate) fn is_filtered(&self) -> bool {
+        !self.query.trim().is_empty()
+    }
+
+    pub(crate) fn filters_changed(&mut self, cx: &mut Context<Self>) {
+        self.reset_selection();
+        self.scroll.scroll_to_item_strict(0, ScrollStrategy::Top);
+        cx.notify();
+    }
+
+    pub(crate) fn clear_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.query.clear();
+        self.search
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.filters_changed(cx);
+    }
+
+    fn persist_session(&mut self, cx: &mut Context<Self>) {
+        self.session_pending = Some(session::Snapshot {
+            patches: self
+                .collection
+                .patches
+                .iter()
+                .map(|entry| entry.patch.clone())
+                .collect(),
+            exported: !self.collection.needs_export(),
+            read_bank: self.collection.read_bank.clone(),
+        });
+        self.save_next_session(cx);
+    }
+
+    fn save_next_session(&mut self, cx: &mut Context<Self>) {
+        if self.session_saving {
+            return;
+        }
+        let Some(snapshot) = self.session_pending.take() else {
+            return;
+        };
+        let Some(path) = self.session_path.clone() else {
+            self.close_after_save = None;
+            self.busy = false;
+            self.fail(
+                anyhow::anyhow!("No application folder is available for session recovery"),
+                cx,
+            );
+            return;
+        };
+        self.session_saving = true;
+        self.recovery_status = "Saving session…";
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let saved = cx
+                .background_spawn(async move { session::save(&path, &snapshot) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.session_saving = false;
+                match saved {
+                    Ok(()) => {
+                        this.recovery_status = "Session saved";
+                        if this.session_pending.is_some() {
+                            this.save_next_session(cx);
+                        } else if let Some((intent, handle)) = this.close_after_save.take() {
+                            this.busy = false;
+                            cx.defer(move |cx| {
+                                let _ =
+                                    handle.update(cx, |_, window, cx| intent.finish(window, cx));
+                            });
+                        }
+                    }
+                    Err(error) => {
+                        this.recovery_status = "Session save failed";
+                        if this.close_after_save.take().is_some() {
+                            this.busy = false;
+                        }
+                        this.session_pending = None;
+                        this.fail(
+                            error.context(
+                                "Could not save the session. Export a .syx backup before closing",
+                            ),
+                            cx,
+                        );
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn finish_close(
+        &mut self,
+        intent: CloseIntent,
+        handle: AnyWindowHandle,
+        cx: &mut Context<Self>,
+    ) {
+        self.busy = true;
+        self.close_after_save = Some((intent, handle));
+        self.persist_session(cx);
+    }
+
     pub(crate) fn sync_status(&self) -> Option<&'static str> {
         self.sync.status(&self.collection.patches)
     }
 
     pub(crate) fn editable(&self) -> bool {
         !self.busy
+    }
+
+    pub(crate) fn preview_status(&self) -> String {
+        if self.previewing {
+            "Loading preview…".into()
+        } else if self.auto_preview && !self.connected {
+            "Auto preview paused · Connect Prophet-6 by USB".into()
+        } else if self.auto_preview && self.selected.len() > 1 {
+            "Auto preview paused · Select one patch".into()
+        } else if !self.connected {
+            "Connect Prophet-6 by USB to preview · Organize and export offline".into()
+        } else if let Some(name) = &self.last_preview {
+            format!("On Prophet-6: {name}")
+        } else if self.auto_preview {
+            "Select a patch, then play the Prophet-6".into()
+        } else {
+            "Preview sounds without overwriting saved patches".into()
+        }
     }
 
     fn fail(&mut self, error: anyhow::Error, cx: &mut Context<Self>) {
@@ -149,14 +350,17 @@ impl Librarian {
         }
         let entries = &self.collection().patches;
         let id = entries[index].id;
+        let changed = self.selected.len() != 1 || !self.selected.contains(&id);
         if extend {
+            let visible = self.visible_indices();
+            let position = visible.iter().position(|i| *i == index).unwrap();
             let anchor = self
                 .anchor
-                .and_then(|id| entries.iter().position(|e| e.id == id))
-                .unwrap_or(index);
-            self.selected = entries[anchor.min(index)..=anchor.max(index)]
+                .and_then(|id| visible.iter().position(|i| entries[*i].id == id))
+                .unwrap_or(position);
+            self.selected = visible[anchor.min(position)..=anchor.max(position)]
                 .iter()
-                .map(|e| e.id)
+                .map(|i| entries[*i].id)
                 .collect();
         } else if toggle {
             if !self.selected.remove(&id) {
@@ -168,6 +372,12 @@ impl Librarian {
             self.anchor = Some(id);
         }
         self.current = Some(id);
+        if changed || extend || toggle {
+            self.cancel_pending_preview();
+        }
+        if changed && !extend && !toggle {
+            self.schedule_preview(cx);
+        }
         cx.notify();
     }
 
@@ -177,7 +387,7 @@ impl Librarian {
         gap: usize,
         cx: &mut Context<Self>,
     ) -> bool {
-        if !self.editable() {
+        if !self.editable() || self.is_filtered() {
             return false;
         }
         if !self.collection.reorder(&ids, gap) {
@@ -196,6 +406,7 @@ impl Librarian {
             .or_else(|| self.selected.first().copied());
         self.anchor = self.current;
         self.error = None;
+        self.persist_session(cx);
         cx.notify();
         true
     }
@@ -213,31 +424,38 @@ impl Librarian {
             cx.stop_propagation();
             return;
         }
+        let visible = self.visible_indices();
         let patches = &self.collection().patches;
-        if patches.is_empty() {
+        if visible.is_empty() {
             return;
         }
         let position = self
             .current
-            .and_then(|id| patches.iter().position(|e| e.id == id));
+            .and_then(|id| visible.iter().position(|i| patches[*i].id == id));
         let modifiers = event.keystroke.modifiers;
         if self.rename.is_some() {
             return;
         }
         match event.keystroke.key.as_str() {
             "enter" if self.selected.len() == 1 && !modifiers.modified() => {
-                if let Some(index) = position.filter(|i| self.selected.contains(&patches[*i].id)) {
-                    self.start_rename(index, window, cx);
+                if let Some(position) =
+                    position.filter(|i| self.selected.contains(&patches[visible[*i]].id))
+                {
+                    self.start_rename(visible[position], window, cx);
                 }
             }
             "a" if modifiers.platform || modifiers.control => {
-                self.selected = patches.iter().map(|e| e.id).collect();
+                self.selected = visible.iter().map(|i| patches[*i].id).collect();
+                self.cancel_pending_preview();
                 cx.notify();
             }
             "backspace" | "delete" if !self.selected.is_empty() => {
                 self.remove_selected(window, cx);
             }
             "up" | "down" if modifiers.alt && !self.selected.is_empty() => {
+                if self.is_filtered() {
+                    return;
+                }
                 let up = event.keystroke.key == "up";
                 let index = if up {
                     patches
@@ -269,11 +487,11 @@ impl Librarian {
             key @ ("up" | "down" | "home" | "end") => {
                 let index = match key {
                     "up" => position.map_or(0, |i| i.saturating_sub(1)),
-                    "down" => position.map_or(0, |i| (i + 1).min(patches.len() - 1)),
+                    "down" => position.map_or(0, |i| (i + 1).min(visible.len() - 1)),
                     "home" => 0,
-                    _ => patches.len() - 1,
+                    _ => visible.len() - 1,
                 };
-                self.select(index, modifiers.shift, false, cx);
+                self.select(visible[index], modifiers.shift, false, cx);
                 self.scroll.scroll_to_item(index, ScrollStrategy::Nearest);
             }
             _ => return,
@@ -312,7 +530,10 @@ impl Librarian {
             },
         );
         self.select(index, false, false, cx);
-        self.scroll.scroll_to_item(index, ScrollStrategy::Nearest);
+        if let Some(position) = self.visible_indices().iter().position(|i| *i == index) {
+            self.scroll
+                .scroll_to_item(position, ScrollStrategy::Nearest);
+        }
         self.rename = Some(PatchRename {
             id,
             input: input.clone(),
@@ -351,7 +572,12 @@ impl Librarian {
                 return;
             }
             self.collection.replace_patch(index, updated);
-            self.select(index, false, false, cx);
+            if self.visible_indices().contains(&index) {
+                self.select(index, false, false, cx);
+            } else {
+                self.reset_selection();
+            }
+            self.persist_session(cx);
         }
         self.cancel_rename(cx);
         self.list_focus.focus(window, cx);
@@ -375,6 +601,7 @@ impl Librarian {
         self.reset_selection();
         self.list_focus.focus(window, cx);
         self.error = None;
+        self.persist_session(cx);
         cx.notify();
     }
 
@@ -392,12 +619,14 @@ impl Librarian {
                 this.collection.patches.clear();
                 this.reset_selection();
                 this.error = None;
+                this.persist_session(cx);
                 cx.notify();
             },
         );
     }
 
     fn reset_selection(&mut self) {
+        self.cancel_pending_preview();
         self.selected.clear();
         self.current = None;
         self.anchor = None;
@@ -439,27 +668,27 @@ impl Librarian {
         self.run(
             None,
             move |_| -> Result<_> {
-                let mut packs = Vec::new();
+                let mut patches = Vec::new();
                 for path in paths {
                     let patch_file = || sysex::parse(&fs::read(&path)?);
-                    let source = path
+                    let filename = path
                         .file_name()
                         .unwrap_or(path.as_os_str())
                         .to_string_lossy();
-                    let patches =
-                        patch_file().with_context(|| format!("Could not add {source}"))?;
-                    packs.push((Arc::<str>::from(source.as_ref()), patches));
+                    patches
+                        .extend(patch_file().with_context(|| format!("Could not add {filename}"))?);
                 }
-                Ok(packs)
+                Ok(patches)
             },
             |this, result, cx| match result {
-                Ok(packs) => {
+                Ok(patches) => {
                     let start = this.collection.patches.len();
-                    for (source, patches) in packs {
-                        this.collection.append(patches, source);
-                    }
-                    this.scroll
-                        .scroll_to_item_strict(start, ScrollStrategy::Top);
+                    this.collection.append(patches);
+                    this.persist_session(cx);
+                    this.scroll.scroll_to_item_strict(
+                        if this.is_filtered() { 0 } else { start },
+                        ScrollStrategy::Top,
+                    );
                     cx.notify();
                 }
                 Err(err) => this.fail(err, cx),
@@ -469,16 +698,31 @@ impl Librarian {
     }
 
     pub(crate) fn export(&mut self, cx: &mut Context<Self>) {
+        self.export_with_close(None, cx);
+    }
+
+    fn export_with_close(
+        &mut self,
+        close: Option<(CloseIntent, AnyWindowHandle)>,
+        cx: &mut Context<Self>,
+    ) {
         if self.busy {
             return;
         }
-        let patches = self.collection.export_patches(&self.selected);
+        self.cancel_pending_preview();
+        let all = BTreeSet::new();
+        let patches = self.collection.export_patches(if close.is_some() {
+            &all
+        } else {
+            &self.selected
+        });
+        let full_list = patches.len() == self.collection.patches.len();
         if patches.is_empty() {
             return;
         }
         if patches.len() > USER_SLOT_COUNT {
             self.fail(
-                anyhow::anyhow!("Select at most 500 patches to export to user slots 000–499."),
+                anyhow::anyhow!("The list has more than 500 patches. Export selections of at most 500 patches before closing."),
                 cx,
             );
             return;
@@ -507,8 +751,18 @@ impl Librarian {
                         this.run(
                             None,
                             move |_| library::export(&path, &patches),
-                            |this, result, cx| match result {
-                                Ok(()) => cx.notify(),
+                            move |this, result, cx| match result {
+                                Ok(()) => {
+                                    if full_list {
+                                        this.collection.mark_exported();
+                                    }
+                                    cx.notify();
+                                    if let Some((intent, handle)) = close {
+                                        this.finish_close(intent, handle, cx);
+                                    } else {
+                                        this.persist_session(cx);
+                                    }
+                                }
                                 Err(err) => this.fail(err, cx),
                             },
                             cx,
@@ -522,8 +776,100 @@ impl Librarian {
         .detach();
     }
 
+    pub(crate) fn request_close(
+        &mut self,
+        intent: CloseIntent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.busy || self.previewing {
+            return;
+        }
+        self.cancel_pending_preview();
+        self.cancel_rename(cx);
+        if !self.collection.needs_export() {
+            self.finish_close(intent, window.window_handle(), cx);
+            return;
+        }
+        self.busy = true;
+        cx.notify();
+        let description = if self.collection.changed_since_read() {
+            "You’ve changed the list since reading from the Prophet-6. Export the whole list to keep this order and your edits."
+        } else {
+            "This working list hasn’t been exported. Save a .syx file to keep these patches in the order shown."
+        };
+        let view = cx.entity().downgrade();
+        let confirmed = Rc::new(Cell::new(false));
+        let export = Rc::new(Cell::new(true));
+        window.open_alert_dialog(cx, move |dialog, _, _| {
+            let on_ok = confirmed.clone();
+            let on_close = confirmed.clone();
+            let discard = export.clone();
+            let export = export.clone();
+            let view = view.clone();
+            dialog
+                .confirm()
+                .centered()
+                .width(px(488.))
+                .close_button(false)
+                .title("Export before closing?")
+                .description(description)
+                .footer(
+                    div()
+                        .w_full()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            Button::new("close-without-export")
+                                .ghost()
+                                .label("Don’t export")
+                                .on_click(move |_, window, cx| {
+                                    discard.set(false);
+                                    window.dispatch_action(
+                                        Box::new(Confirm { secondary: false }),
+                                        cx,
+                                    );
+                                }),
+                        )
+                        .child(div().flex_1())
+                        .child(
+                            Button::new("cancel-close").label("Cancel").on_click(
+                                |_, window, cx| window.dispatch_action(Box::new(Cancel), cx),
+                            ),
+                        )
+                        .child(
+                            Button::new("export-and-close")
+                                .primary()
+                                .label("Export list…")
+                                .on_click(|_, window, cx| {
+                                    window
+                                        .dispatch_action(Box::new(Confirm { secondary: false }), cx)
+                                }),
+                        ),
+                )
+                .on_ok(move |_, _, _| {
+                    on_ok.set(true);
+                    true
+                })
+                .on_close(move |_, window, cx| {
+                    let _ = view.update(cx, |this, cx| {
+                        this.busy = false;
+                        if on_close.get() {
+                            if export.get() {
+                                this.export_with_close(Some((intent, window.window_handle())), cx);
+                            } else {
+                                this.finish_close(intent, window.window_handle(), cx);
+                            }
+                        }
+                        cx.notify();
+                    });
+                })
+        });
+    }
+
     pub(crate) fn read(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.editable() || !self.connected {
+        if !self.editable() || self.previewing || !self.connected {
             return;
         }
         if self.collection.patches.is_empty() {
@@ -558,10 +904,13 @@ impl Librarian {
             |this, result, cx| match result {
                 Ok(patches) => {
                     this.collection.patches.clear();
-                    this.collection.append(patches, "Prophet-6".into());
+                    this.collection.append(patches);
+                    this.collection.mark_read();
                     this.sync = SyncState::Unsent;
+                    this.last_preview = None;
                     this.reset_selection();
                     this.scroll.scroll_to_item_strict(0, ScrollStrategy::Top);
+                    this.persist_session(cx);
                     cx.notify();
                 }
                 Err(err) => this.fail(err, cx),
@@ -571,7 +920,7 @@ impl Librarian {
     }
 
     pub(crate) fn audition(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.busy || !self.connected || self.selected.len() != 1 {
+        if self.busy || self.previewing || !self.connected || self.selected.len() != 1 {
             return;
         }
         let Some(entry) = self
@@ -583,6 +932,7 @@ impl Librarian {
             return;
         };
         let patch = Arc::clone(&entry.patch);
+        self.cancel_pending_preview();
         if self.skip_preview_warning {
             self.preview(patch, false, cx);
             return;
@@ -623,10 +973,10 @@ impl Librarian {
                 })
                 .on_close(move |_, _, cx| {
                     let _ = view.update(cx, |this, cx| {
+                        this.busy = false;
                         if on_close.get() {
                             this.preview(patch.clone(), close_skip.get(), cx);
                         } else {
-                            this.busy = false;
                             cx.notify();
                         }
                     });
@@ -634,19 +984,100 @@ impl Librarian {
         });
     }
 
+    pub(crate) fn toggle_auto_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.busy {
+            return;
+        }
+        self.cancel_pending_preview();
+        if self.auto_preview {
+            self.auto_preview = false;
+            cx.notify();
+            return;
+        }
+        self.confirm(
+            window,
+            cx,
+            "Preview patches as you browse?",
+            "Selecting a patch or using ↑ / ↓ will load it into the Prophet-6 edit buffer. Play the synth to hear it. Unsaved edits on the synth will be replaced; saved patches stay unchanged.",
+            ("Enable auto preview", ButtonVariant::Primary),
+            |this, cx| {
+                this.auto_preview = true;
+                this.schedule_preview(cx);
+                cx.notify();
+            },
+        );
+    }
+
+    fn cancel_pending_preview(&mut self) {
+        self.preview_generation += 1;
+        self.pending_preview = None;
+    }
+
+    fn schedule_preview(&mut self, cx: &mut Context<Self>) {
+        if !self.auto_preview || !self.connected || self.busy || self.selected.len() != 1 {
+            return;
+        }
+        let generation = self.preview_generation;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(120))
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.preview_generation == generation {
+                    this.preview_selected(cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn preview_selected(&mut self, cx: &mut Context<Self>) {
+        if !self.auto_preview || !self.connected || self.busy || self.selected.len() != 1 {
+            return;
+        }
+        let id = *self.selected.first().unwrap();
+        if self.previewing {
+            self.pending_preview = Some(id);
+            return;
+        }
+        if let Some(entry) = self.collection.patches.iter().find(|entry| entry.id == id) {
+            self.preview(entry.patch.clone(), false, cx);
+        }
+    }
+
     fn preview(&mut self, patch: Arc<Patch>, skip_warning: bool, cx: &mut Context<Self>) {
         let path = self.preview_preference.clone();
-        self.run(
-            None,
-            move |_| {
-                let preference = if skip_warning {
-                    save_preview_preference(path.as_deref())
-                } else {
-                    Ok(())
-                };
-                (midi::audition(&patch), preference)
-            },
-            move |this, (sent, preference), cx| {
+        let name = patch.name();
+        self.previewing = true;
+        self.error = None;
+        cx.notify();
+        let task = cx.background_spawn(async move {
+            let preference = if skip_warning {
+                save_preview_preference(path.as_deref())
+            } else {
+                Ok(())
+            };
+            let sent = midi::audition(&patch);
+            // Let the synth process its edit buffer before sending the next selection.
+            std::thread::sleep(Duration::from_millis(100));
+            (sent, preference)
+        });
+        cx.spawn(async move |this, cx| {
+            let (sent, preference) = task.await;
+            let _ = this.update(cx, |this, cx| {
+                this.previewing = false;
+                if sent.is_ok() && this.connected {
+                    this.last_preview = Some(if name.is_empty() {
+                        "Untitled patch".into()
+                    } else {
+                        name
+                    });
+                }
+                if sent.is_err() {
+                    this.auto_preview = false;
+                    this.cancel_pending_preview();
+                    this.last_preview = None;
+                }
                 if skip_warning && preference.is_ok() {
                     this.skip_preview_warning = true;
                 }
@@ -658,13 +1089,24 @@ impl Librarian {
                         this.fail(anyhow::anyhow!("{send:#}. {preference:#}"), cx);
                     }
                 }
-            },
-            cx,
-        );
+                if this
+                    .pending_preview
+                    .take()
+                    .is_some_and(|id| this.selected.contains(&id))
+                {
+                    this.preview_selected(cx);
+                }
+            });
+        })
+        .detach();
     }
 
     pub(crate) fn write(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.busy || !self.connected || self.collection.patches.len() != USER_SLOT_COUNT {
+        if self.busy
+            || self.previewing
+            || !self.connected
+            || self.collection.patches.len() != USER_SLOT_COUNT
+        {
             return;
         }
         self.confirm(
@@ -686,6 +1128,7 @@ impl Librarian {
         (button, variant): (&'static str, ButtonVariant),
         action: fn(&mut Self, &mut Context<Self>),
     ) {
+        self.cancel_pending_preview();
         self.busy = true;
         cx.notify();
         let view = cx.entity().downgrade();
@@ -759,6 +1202,7 @@ impl Librarian {
         done: impl FnOnce(&mut Self, T, &mut Context<Self>) + 'static,
         cx: &mut Context<Self>,
     ) {
+        self.cancel_pending_preview();
         self.busy = true;
         self.error = None;
         cx.notify();
@@ -827,7 +1271,7 @@ mod tests {
         frame.push(0xf7);
         let patch = sysex::parse(&frame).unwrap().remove(0);
         let mut list = Collection::default();
-        list.append(vec![patch.clone(), patch], "Prophet-6".into());
+        list.append(vec![patch.clone(), patch]);
         let ids: Vec<_> = list.patches.iter().map(|entry| entry.id).collect();
         let sent = SyncState::Sent(ids.clone());
         let failed = SyncState::SendFailed;

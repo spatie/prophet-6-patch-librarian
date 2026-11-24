@@ -61,6 +61,10 @@ impl Patch {
         self.dump(&EDIT_BUFFER_DUMP)
     }
 
+    pub(crate) fn same_program(&self, other: &Self) -> bool {
+        self.packed == other.packed
+    }
+
     fn dump(&self, header: &[u8]) -> Vec<u8> {
         let mut message = Vec::with_capacity(header.len() + PACKED_LEN + 1);
         message.extend_from_slice(header);

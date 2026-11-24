@@ -27,16 +27,21 @@ You're free to use the app. If it earns a spot next to your Prophet-6, we'd love
 
 ## Usage
 
-You don't have to plug in the synth to get started. Drop a couple of `.syx` files onto the list or click **Add .syx**. Each file adds its patches to the end, and the **Source** column tells you which pack each patch came from. Drag your favorites into the order you want. Shift-click to select a range, or hold Command on macOS (Ctrl on Linux) to pick patches one at a time.
+You don't have to plug in the synth to get started. Drop a couple of `.syx` files onto the list or click **Add .syx**. Each file adds its patches to the end. Drag your favorites into the order you want. Shift-click to select a range, or hold Command on macOS (Ctrl on Linux) to pick patches one at a time.
 
 To rename a patch, click its name and press Return when you're happy with it. Escape cancels the edit. The Prophet-6 has room for 20 printable ASCII characters per name. Use **Remove selected** to take patches out of the list, or **Clear list** to start over. None of this touches the original files or the patches on your synth.
 
-When you've got a list you like, click **Export**. It saves the selected patches, or the whole list if nothing is selected, as a `.syx` file. The exported slots start at `000` and follow the list order. On a Mac, closing the window keeps your list around: just click the Dock icon to bring it back. Quitting clears it, so export anything you want to keep first.
+When you've got a list you like, click **Export**. It saves the selected patches, or the whole list if nothing is selected, as a `.syx` file. The exported slots start at `000` and follow the list order. Closing the window or quitting offers to export any list you haven't saved, including changes made since reading from the synth. That export always includes the whole list, even if some patches are selected. Cancelling the export keeps the app open. Lists larger than 500 patches need to be exported in selections of up to 500.
+
+Use **Search** (Command+F on Mac, Ctrl+F on Linux) to find patches by name. Searching never changes slot numbers or export order. Selection and Select All apply to the visible results; clear the search before dragging patches into a new order.
+
+The app saves your patches, order, and export status automatically. After quitting or a crash, the next launch restores the last saved session. The footer shows when saving has finished; auto preview always starts off. Recovery is a local safety net, not a substitute for exporting `.syx` backups. On a Mac, clicking the Dock icon also reopens a closed window with the same list.
 
 When you're ready to plug in the Prophet-6, connect it directly over USB. On the synth, open the upper Globals menu and set **MIDI SysEx** (button 8) to **USB**. Here's what I'd do next:
 
 - **Back up what's already on the synth.** Click **Read** to pull in all 500 user slots, then export the whole list before rearranging it. If you're already working on a list, export that first: a successful read replaces it.
 - **Try a sound before committing to it.** Select one patch, click **Preview**, and play a few notes on the Prophet-6. This won't overwrite a saved patch, but it will replace any unsaved edits on the synth.
+- **Preview as you browse.** Enable **Auto preview** beside Preview, then click another row or use ↑ / ↓. A short pause skips intermediate selections when you browse quickly. Multiple selections and a disconnected synth pause automatic previews. The switch starts off each time you launch the app and asks before enabling. Preview controls are also in the **Patch** menu, with Command+P for manual preview and Command+Shift+P for auto preview (Ctrl on Linux).
 - **Send the bank when you're happy with it.** You'll need exactly 500 patches. **Send** asks before replacing user slots `000–499` in list order. It leaves factory slots `500–999` alone and doesn't read the user slots back to verify the write.
 
 For the MIDI details, see [Appendix C of the Prophet-6 manual](https://sequential.com/wp-content/uploads/2021/02/Prophet-6-Operation-Manual-2.1.pdf).

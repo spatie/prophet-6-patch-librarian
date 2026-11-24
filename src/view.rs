@@ -1,5 +1,5 @@
 use crate::{
-    Export, Import,
+    AutoPreview, Export, Import, Preview, Search,
     app::{Librarian, Transfer},
     library::{Entry, USER_SLOT_COUNT},
 };
@@ -12,6 +12,7 @@ use gpui_kit::{
         input::Input,
         list::ListItem,
         progress::Progress,
+        switch::Switch,
     },
     prelude::FluentBuilder,
     *,
@@ -53,6 +54,20 @@ impl Render for Librarian {
             })
             .on_action(cx.listener(|this, _: &Import, _, cx| this.import_picker(cx)))
             .on_action(cx.listener(|this, _: &Export, _, cx| this.export(cx)))
+            .on_action(cx.listener(|this, _: &Preview, window, cx| this.audition(window, cx)))
+            .on_action(cx.listener(|this, _: &Search, window, cx| {
+                if !this.busy {
+                    this.search.update(cx, |input, cx| {
+                        input.focus(window, cx);
+                        input.select_all(window, cx);
+                    });
+                }
+            }))
+            .on_action(
+                cx.listener(|this, _: &AutoPreview, window, cx| {
+                    this.toggle_auto_preview(window, cx)
+                }),
+            )
             .map(|root| {
                 #[cfg(target_os = "macos")]
                 let root = root.child(
@@ -96,6 +111,29 @@ impl Librarian {
                     .child(self.toolbar(cx));
                 body
             })
+            .child(self.browsing_controls(cx))
+            .child(
+                div()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_4()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(
+                        div()
+                            .id("preview-status")
+                            .min_w_0()
+                            .truncate()
+                            .role(Role::Status)
+                            .aria_label(self.preview_status())
+                            .child(self.preview_status()),
+                    )
+                    .when(self.is_filtered(), |bar| {
+                        bar.child("Clear search to reorder")
+                    }),
+            )
             .child(self.patch_list(cx))
             .when_some(self.error.as_ref(), |root, error| {
                 root.child(
@@ -106,6 +144,19 @@ impl Librarian {
                         .child(error.clone()),
                 )
             })
+    }
+
+    fn browsing_controls(&self, _: &Context<Self>) -> impl IntoElement {
+        div().flex_none().flex().items_center().gap_2().child(
+            div().flex_1().min_w_0().child(
+                Input::new(&self.search)
+                    .small()
+                    .aria_label("Search patches")
+                    .prefix(IconName::Search)
+                    .cleanable(true)
+                    .disabled(self.busy),
+            ),
+        )
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -134,12 +185,6 @@ impl Librarian {
             .gap_2()
             .px_2()
             .py_1()
-            .rounded_full()
-            .bg(if self.connected {
-                theme.green.opacity(0.10)
-            } else {
-                theme.foreground.opacity(0.045)
-            })
             .text_xs()
             .text_color(theme.muted_foreground)
             .child(div().size(px(6.)).rounded_full().bg(if self.connected {
@@ -157,7 +202,7 @@ impl Librarian {
     fn toolbar(&self, cx: &Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let count = self.collection().patches.len();
-        let online = self.connected && !self.busy;
+        let online = self.connected && !self.busy && !self.previewing;
         let send_hint = match count.cmp(&USER_SLOT_COUNT) {
             std::cmp::Ordering::Less => "Add patches to fill all 500 user slots",
             std::cmp::Ordering::Greater => "Remove extra patches to fit 500 user slots",
@@ -172,13 +217,10 @@ impl Librarian {
             }
         };
         let preview = action("preview", IconName::Play)
-            .when(!cfg!(target_os = "macos"), |button| button.primary())
-            .label(if cfg!(target_os = "macos") {
-                "Preview"
-            } else {
-                "Preview patch"
-            })
-            .tooltip(if self.selected.len() == 1 {
+            .label("Preview")
+            .tooltip(if !self.connected {
+                "Connect the Prophet-6 by USB to preview patches"
+            } else if self.selected.len() == 1 {
                 "Load the patch temporarily, then play it on the Prophet-6"
             } else {
                 "Select one patch to preview"
@@ -237,8 +279,8 @@ impl Librarian {
                                     .gap_2()
                                     .child(
                                         action("read", IconName::ArrowDown)
-                                            .label(if cfg!(target_os = "macos") { "Read" } else { "Read from synth" })
-                                            .tooltip("Replace the list with the 500 user slots from the Prophet-6")
+                                            .label("Read")
+                                            .tooltip(if self.connected { "Replace the list with the 500 user slots from the Prophet-6" } else { "Connect the Prophet-6 by USB to read its patches" })
                                             .disabled(!online)
                                             .on_click(cx.listener(|this, _, window, cx| {
                                                 this.read(window, cx)
@@ -246,15 +288,26 @@ impl Librarian {
                                     )
                                     .child(
                                         action("send", IconName::ArrowUp)
-                                            .label(if cfg!(target_os = "macos") { "Send" } else { "Send to synth" })
-                                            .tooltip(send_hint)
+                                            .label("Send")
+                                            .tooltip(if self.connected { send_hint } else { "Connect the Prophet-6 by USB to send patches" })
                                             .disabled(!online || count != USER_SLOT_COUNT)
                                             .on_click(cx.listener(|this, _, window, cx| {
                                                 this.write(window, cx)
                                             })),
                                     ),
                             )
-                            .child(preview)
+                            .child(
+                                div().flex().items_center().gap_3()
+                                    .pl_3().border_l_1().border_color(theme.border)
+                                    .child(preview)
+                                    .child(
+                                        Switch::new("auto-preview").small().label("Auto preview")
+                                            .checked(self.auto_preview)
+                                            .disabled(self.busy)
+                                            .tooltip("Preview each newly selected patch (⌘⇧P on Mac, Ctrl+Shift+P on Linux)")
+                                            .on_change(cx.listener(|this, _, window, cx| this.toggle_auto_preview(window, cx))),
+                                    ),
+                            )
                             .when(cfg!(target_os = "macos"), |bar| {
                                 bar.child(self.usb_status(theme))
                             }),
@@ -264,6 +317,8 @@ impl Librarian {
     fn patch_list(&self, cx: &Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let count = self.collection().patches.len();
+        let visible = self.visible_indices();
+        let shown = visible.len();
         let selected = self.selected.len();
         let view = cx.entity().downgrade();
         div()
@@ -331,8 +386,7 @@ impl Librarian {
                         .text_color(theme.muted_foreground)
                         .child(div().w_8())
                         .child(div().w_16().child("Slot"))
-                        .child(div().flex_1().child("Patch"))
-                        .child(div().w_48().child("Source")),
+                        .child(div().flex_1().child("Patch")),
                 )
                 .child(
                     div()
@@ -357,36 +411,70 @@ impl Librarian {
                                 this.reorder(drag.0.clone(), gap, cx);
                             }
                         }))
-                        .child(
-                            uniform_list("patch-rows", count, move |range, window, cx| {
-                                let Some(view) = view.upgrade() else {
-                                    return Vec::new();
-                                };
-                                let this = view.read(cx);
-                                let projection = (!this.dragged_ids.is_empty()
-                                    && cx.has_active_drag())
-                                .then(|| this.gap_at(window.mouse_position()))
-                                .flatten()
-                                .map(|gap| {
-                                    this.collection().projected_order(&this.dragged_ids, gap)
-                                });
-                                let rows =
-                                    projection.as_deref().unwrap_or(&this.collection().patches);
-                                range
-                                    .map(|i| {
-                                        this.row(
-                                            i,
-                                            &rows[i],
-                                            projection.is_some(),
-                                            view.downgrade(),
-                                            cx,
-                                        )
-                                    })
-                                    .collect()
-                            })
-                            .size_full()
-                            .track_scroll(&self.scroll),
-                        ),
+                        .when(shown == 0, |list| {
+                            list.child(
+                                div()
+                                    .size_full()
+                                    .flex()
+                                    .flex_col()
+                                    .items_center()
+                                    .justify_center()
+                                    .gap_3()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .child("No matching patches"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(theme.muted_foreground)
+                                            .child("Try another name. Your list is unchanged."),
+                                    )
+                                    .child(
+                                        Button::new("empty-clear-search")
+                                            .small()
+                                            .label("Clear search")
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.clear_search(window, cx)
+                                            })),
+                                    ),
+                            )
+                        })
+                        .when(shown != 0, |list| {
+                            list.child(
+                                uniform_list("patch-rows", shown, move |range, window, cx| {
+                                    let Some(view) = view.upgrade() else {
+                                        return Vec::new();
+                                    };
+                                    let this = view.read(cx);
+                                    let projection = (!this.dragged_ids.is_empty()
+                                        && cx.has_active_drag())
+                                    .then(|| this.gap_at(window.mouse_position()))
+                                    .flatten()
+                                    .map(|gap| {
+                                        this.collection().projected_order(&this.dragged_ids, gap)
+                                    });
+                                    let rows =
+                                        projection.as_deref().unwrap_or(&this.collection().patches);
+                                    range
+                                        .map(|i| {
+                                            let i = visible[i];
+                                            this.row(
+                                                i,
+                                                &rows[i],
+                                                projection.is_some(),
+                                                view.downgrade(),
+                                                cx,
+                                            )
+                                        })
+                                        .collect()
+                                })
+                                .size_full()
+                                .track_scroll(&self.scroll),
+                            )
+                        }),
                 )
                 .child(
                     div()
@@ -420,6 +508,14 @@ impl Librarian {
                                                     "{count} / {USER_SLOT_COUNT} patches"
                                                 )),
                                         )
+                                        .child(if self.collection().needs_export() {
+                                            "Not exported"
+                                        } else {
+                                            "Exported"
+                                        })
+                                        .when(self.is_filtered(), |counter| {
+                                            counter.child(format!("{shown} shown"))
+                                        })
                                         .when(count > USER_SLOT_COUNT, |counter| {
                                             counter.child(div().text_color(theme.danger).child(
                                                 format!(
@@ -431,7 +527,14 @@ impl Librarian {
                                 )
                                 .when_some(self.sync_status(), |footer, status| {
                                     footer.child(div().child(status))
-                                }),
+                                })
+                                .child(
+                                    div()
+                                        .id("recovery-status")
+                                        .role(Role::Status)
+                                        .aria_label(self.recovery_status)
+                                        .child(self.recovery_status),
+                                ),
                         )
                         .child(
                             div()
@@ -497,7 +600,6 @@ impl Librarian {
         } else {
             "—".into()
         };
-        let source = SharedString::from(entry.source.as_ref().to_owned());
         let moving = projecting && self.dragged_ids.contains(&id);
         let selected = self.selected.contains(&id);
         let theme = cx.theme();
@@ -584,7 +686,7 @@ impl Librarian {
                 .px_4()
                 .border_b_1()
                 .border_color(theme.foreground.opacity(0.05))
-                .accessibility_label(format!("Slot {slot}, {name}, {source}"))
+                .accessibility_label(format!("Slot {slot}, {name}"))
                 .when(moving, |row| row.bg(theme.primary.opacity(0.09)))
                 .when(interactive && rename.is_none(), |row| {
                     let drag_focus = focus.clone();
@@ -600,13 +702,15 @@ impl Librarian {
                             this.select(index, keys.shift, keys.platform || keys.control, cx)
                         });
                     })
-                    .on_drag(DragPatches(ids), move |drag, _, window, cx| {
-                        drag_focus.focus(window, cx);
-                        let _ = view.update(cx, |this, cx| {
-                            this.dragged_ids = drag.0.clone();
-                            cx.notify();
-                        });
-                        cx.new(|_| DragPreview)
+                    .when(!self.is_filtered(), |row| {
+                        row.on_drag(DragPatches(ids), move |drag, _, window, cx| {
+                            drag_focus.focus(window, cx);
+                            let _ = view.update(cx, |this, cx| {
+                                this.dragged_ids = drag.0.clone();
+                                cx.notify();
+                            });
+                            cx.new(|_| DragPreview)
+                        })
                     })
                 })
                 .child(
@@ -623,7 +727,7 @@ impl Librarian {
                                 } else {
                                     theme.muted_foreground
                                 })
-                                .child("⠿"),
+                                .child(if self.is_filtered() { "" } else { "⠿" }),
                         )
                         .child(
                             div()
@@ -633,16 +737,7 @@ impl Librarian {
                                 .text_color(theme.muted_foreground)
                                 .child(slot),
                         )
-                        .child(name_cell)
-                        .child(
-                            div()
-                                .w_48()
-                                .flex_none()
-                                .truncate()
-                                .text_xs()
-                                .text_color(theme.muted_foreground)
-                                .child(source),
-                        ),
+                        .child(name_cell),
                 ),
         )
     }
